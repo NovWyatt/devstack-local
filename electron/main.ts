@@ -9,12 +9,16 @@
 import { app, BrowserWindow, ipcMain, dialog } from 'electron';
 import path from 'path';
 import { ProcessManager } from './services/process.manager';
+import { PhpService } from './services/php.service';
 
 /** Singleton reference to the main application window */
 let mainWindow: BrowserWindow | null = null;
 
 /** Central process manager for all services */
 const processManager = new ProcessManager();
+
+/** PHP version manager */
+const phpService = new PhpService();
 
 /**
  * Create the main application window.
@@ -62,6 +66,19 @@ function createWindow(): void {
   // Register the window with the process manager for IPC broadcasts
   processManager.setMainWindow(mainWindow);
 
+  // Wire PHP service log emitter to process manager's broadcast
+  phpService.setLogEmitter((level, message) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      const logEntry = {
+        id: `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+        timestamp: new Date(),
+        level,
+        message,
+      };
+      mainWindow.webContents.send('log:entry', logEntry);
+    }
+  });
+
   // Handle window close — prompt user, stop services first
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -87,6 +104,57 @@ function registerIpcHandlers(): void {
   ipcMain.handle('service:status', async (_event, service: string) => {
     return processManager.getServiceStatus(service as 'apache' | 'mysql');
   });
+
+  // ─── PHP Version Management ────────────────────────────────────────
+
+  // Get all available PHP versions
+  ipcMain.handle('php:get-versions', async () => {
+    return phpService.getAvailableVersions();
+  });
+
+  // Set the active PHP version
+  ipcMain.handle('php:set-active', async (_event, version: string) => {
+    return phpService.setActiveVersion(version);
+  });
+
+  // Get active PHP version
+  ipcMain.handle('php:get-active', async () => {
+    return phpService.getActiveVersion();
+  });
+
+  // Get php.ini content
+  ipcMain.handle('php:get-ini', async (_event, version: string) => {
+    return phpService.getPhpIniContent(version);
+  });
+
+  // Save php.ini content
+  ipcMain.handle('php:save-ini', async (_event, version: string, content: string) => {
+    return phpService.savePhpIniContent(version, content);
+  });
+
+  // Get extensions list
+  ipcMain.handle('php:get-extensions', async (_event, version: string) => {
+    return phpService.getExtensions(version);
+  });
+
+  // Toggle extension
+  ipcMain.handle('php:toggle-extension', async (_event, version: string, ext: string, enabled: boolean) => {
+    return phpService.toggleExtension(version, ext, enabled);
+  });
+
+  // Download/install a PHP version
+  ipcMain.handle('php:download', async (event, version: string) => {
+    return phpService.downloadVersion(version, (progress) => {
+      event.sender.send('php:download-progress', version, progress);
+    });
+  });
+
+  // Remove a PHP version
+  ipcMain.handle('php:remove-version', async (_event, version: string) => {
+    return phpService.removeVersion(version);
+  });
+
+  // ─── Application ───────────────────────────────────────────────────
 
   // Exit application with confirmation
   ipcMain.handle('app:exit', async () => {

@@ -7,6 +7,7 @@
 
 import { Server, Database, Loader2 } from 'lucide-react';
 import { useAppStore } from '../../stores/useAppStore';
+import { usePhpStore } from '../../stores/usePhpStore';
 import { cn } from '../../lib/utils';
 import type { ServiceName } from '../../types';
 
@@ -32,6 +33,7 @@ export function ServiceCard({ service }: ServiceCardProps) {
   const serviceState = useAppStore((state) => state[service]);
   const startService = useAppStore((state) => state.startService);
   const stopService = useAppStore((state) => state.stopService);
+  const phpActiveVersion = usePhpStore((state) => state.activeVersion);
 
   const config = serviceConfig[service];
   const Icon = config.icon;
@@ -124,6 +126,20 @@ export function ServiceCard({ service }: ServiceCardProps) {
           value={serviceState.pid ? String(serviceState.pid) : '—'}
           muted={!serviceState.pid}
         />
+        {/* Show PHP version on the Apache card */}
+        {service === 'apache' && (
+          <div className="flex items-center justify-between py-2 px-3 rounded-lg bg-white/[0.03]">
+            <span className="text-sm text-text-muted">PHP Version</span>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium font-mono text-text-primary">
+                {phpActiveVersion}
+              </span>
+              <span className="px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider rounded bg-accent-blue/15 text-accent-blue border border-accent-blue/20">
+                Active
+              </span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ─── Start / Stop Button ─────────────────────────────────── */}

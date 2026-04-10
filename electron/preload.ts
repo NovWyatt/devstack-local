@@ -70,4 +70,47 @@ contextBridge.exposeInMainWorld('electronAPI', {
   exitApp: () => {
     return ipcRenderer.invoke('app:exit');
   },
+
+  // ─── PHP Version Management ──────────────────────────────────────
+
+  /** Get all available PHP versions */
+  phpGetVersions: () => ipcRenderer.invoke('php:get-versions'),
+
+  /** Set the active PHP version */
+  phpSetActive: (version: string) => ipcRenderer.invoke('php:set-active', version),
+
+  /** Get the active PHP version string */
+  phpGetActive: () => ipcRenderer.invoke('php:get-active'),
+
+  /** Get php.ini content for a version */
+  phpGetIni: (version: string) => ipcRenderer.invoke('php:get-ini', version),
+
+  /** Save php.ini content for a version */
+  phpSaveIni: (version: string, content: string) =>
+    ipcRenderer.invoke('php:save-ini', version, content),
+
+  /** Get extensions list for a version */
+  phpGetExtensions: (version: string) => ipcRenderer.invoke('php:get-extensions', version),
+
+  /** Toggle an extension on/off */
+  phpToggleExtension: (version: string, ext: string, enabled: boolean) =>
+    ipcRenderer.invoke('php:toggle-extension', version, ext, enabled),
+
+  /** Download and install a PHP version */
+  phpDownload: (version: string) => ipcRenderer.invoke('php:download', version),
+
+  /** Remove an installed PHP version */
+  phpRemoveVersion: (version: string) => ipcRenderer.invoke('php:remove-version', version),
+
+  /** Listen for download progress updates */
+  onPhpDownloadProgress: (callback: (version: string, progress: number) => void) => {
+    ipcRenderer.on('php:download-progress', (_event, version, progress) =>
+      callback(version, progress)
+    );
+  },
+
+  /** Remove download progress listener */
+  removePhpDownloadProgressListener: () => {
+    ipcRenderer.removeAllListeners('php:download-progress');
+  },
 });

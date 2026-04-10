@@ -9,6 +9,7 @@ import { useEffect, useRef } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { Layout } from './components/layout/Layout';
 import { Dashboard } from './components/dashboard/Dashboard';
+import { PhpManager } from './components/php-manager/PhpManager';
 import { ComingSoon } from './components/shared/ComingSoon';
 import { useAppStore } from './stores/useAppStore';
 
@@ -52,7 +53,7 @@ function App() {
     <Layout>
       <Routes>
         <Route path="/" element={<Dashboard />} />
-        <Route path="/php-manager" element={<ComingSoon title="PHP Manager" />} />
+        <Route path="/php-manager" element={<PhpManager />} />
         <Route path="/domains" element={<ComingSoon title="Domains" />} />
         <Route path="/database" element={<ComingSoon title="Database" />} />
         <Route path="/ssh-ftp" element={<ComingSoon title="SSH / FTP" />} />

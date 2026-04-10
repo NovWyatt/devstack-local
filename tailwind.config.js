@@ -20,6 +20,7 @@ export default {
         'status-stopped': '#ef4444',
         'status-warning': '#f59e0b',
         'border-color': 'rgba(255, 255, 255, 0.1)',
+        'border-color-hover': 'rgba(255, 255, 255, 0.2)',
       },
       fontFamily: {
         sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
