@@ -74,6 +74,9 @@ export interface ElectronAPI {
   /** Stop a running service */
   stopService: (service: ServiceName) => Promise<ServiceResult>;
 
+  /** Restart a service (stop + start) */
+  restartService: (service: ServiceName) => Promise<ServiceResult>;
+
   /** Get the current status of a service */
   getServiceStatus: (service: ServiceName) => Promise<ServiceState>;
 
@@ -88,6 +91,12 @@ export interface ElectronAPI {
 
   /** Remove the service status change listener */
   removeServiceStatusListener: () => void;
+
+  /** Subscribe to service error events */
+  onServiceError: (callback: (payload: { service: string; error: string }) => void) => void;
+
+  /** Remove service error listeners */
+  removeServiceErrorListener: () => void;
 }
 
 /**

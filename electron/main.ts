@@ -4,12 +4,16 @@
  * Entry point for the DevStack Local application.
  * Creates the main BrowserWindow, sets up IPC handlers for service management,
  * and configures the application lifecycle (ready, close, quit).
+ *
+ * Phase 2.5: Real process management with tree-kill, electron-store persistence,
+ * and proper service error broadcasting.
  */
 
 import { app, BrowserWindow, ipcMain, dialog } from 'electron';
 import path from 'path';
 import { ProcessManager } from './services/process.manager';
 import { PhpService } from './services/php.service';
+import { ConfigStore } from './utils/config.store';
 
 /** Singleton reference to the main application window */
 let mainWindow: BrowserWindow | null = null;
@@ -20,9 +24,11 @@ const processManager = new ProcessManager();
 /** PHP version manager */
 const phpService = new PhpService();
 
+/** Track whether we're already quitting to prevent double-stop */
+let isQuitting = false;
+
 /**
  * Create the main application window.
- * Configures window size, appearance, and web preferences for security.
  */
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -38,7 +44,6 @@ function createWindow(): void {
       nodeIntegration: false,
       sandbox: false,
     },
-    // Frameless for modern look with custom title bar
     frame: true,
     titleBarStyle: 'hidden',
     titleBarOverlay: {
@@ -46,18 +51,16 @@ function createWindow(): void {
       symbolColor: '#9ca3af',
       height: 40,
     },
-    show: false, // Show after ready-to-show to prevent flash
+    show: false,
   });
 
-  // Show window once content is ready to avoid white flash
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show();
   });
 
-  // Load the app — Vite dev server in development, built files in production
+  // Load the app
   if (process.env.VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
-    // Open DevTools in development
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
@@ -66,7 +69,8 @@ function createWindow(): void {
   // Register the window with the process manager for IPC broadcasts
   processManager.setMainWindow(mainWindow);
 
-  // Wire PHP service log emitter to process manager's broadcast
+  // Wire PHP service to process manager for PHP-CGI spawning and logging
+  phpService.setProcessManager(processManager);
   phpService.setLogEmitter((level, message) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       const logEntry = {
@@ -79,84 +83,101 @@ function createWindow(): void {
     }
   });
 
-  // Handle window close — prompt user, stop services first
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
 }
 
 /**
- * Register all IPC handlers for communication with the renderer process.
- * Each handler corresponds to a service management action.
+ * Register all IPC handlers.
  */
 function registerIpcHandlers(): void {
-  // Start a service (apache or mysql)
+  // ─── Service Management ─────────────────────────────────────────
+
+  // Start a service
   ipcMain.handle('service:start', async (_event, service: string, config?: Record<string, unknown>) => {
-    return processManager.startService(service as 'apache' | 'mysql', config);
+    try {
+      return await processManager.startService(service as 'apache' | 'mysql', config);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Unknown error';
+      processManager.broadcastError(service, msg);
+      return { success: false, message: `Failed to start ${service}`, error: msg };
+    }
   });
 
   // Stop a service
   ipcMain.handle('service:stop', async (_event, service: string) => {
-    return processManager.stopService(service as 'apache' | 'mysql');
+    try {
+      return await processManager.stopService(service as 'apache' | 'mysql');
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Unknown error';
+      processManager.broadcastError(service, msg);
+      return { success: false, message: `Failed to stop ${service}`, error: msg };
+    }
+  });
+
+  // Restart a service
+  ipcMain.handle('service:restart', async (_event, service: string) => {
+    try {
+      return await processManager.restartService(service as 'apache' | 'mysql');
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Unknown error';
+      processManager.broadcastError(service, msg);
+      return { success: false, message: `Failed to restart ${service}`, error: msg };
+    }
   });
 
   // Get service status
   ipcMain.handle('service:status', async (_event, service: string) => {
-    return processManager.getServiceStatus(service as 'apache' | 'mysql');
+    try {
+      return processManager.getServiceStatus(service as 'apache' | 'mysql');
+    } catch (error) {
+      return { status: 'stopped', version: '', port: 0 };
+    }
   });
 
   // ─── PHP Version Management ────────────────────────────────────────
 
-  // Get all available PHP versions
   ipcMain.handle('php:get-versions', async () => {
     return phpService.getAvailableVersions();
   });
 
-  // Set the active PHP version
   ipcMain.handle('php:set-active', async (_event, version: string) => {
     return phpService.setActiveVersion(version);
   });
 
-  // Get active PHP version
   ipcMain.handle('php:get-active', async () => {
     return phpService.getActiveVersion();
   });
 
-  // Get php.ini content
   ipcMain.handle('php:get-ini', async (_event, version: string) => {
     return phpService.getPhpIniContent(version);
   });
 
-  // Save php.ini content
   ipcMain.handle('php:save-ini', async (_event, version: string, content: string) => {
     return phpService.savePhpIniContent(version, content);
   });
 
-  // Get extensions list
   ipcMain.handle('php:get-extensions', async (_event, version: string) => {
     return phpService.getExtensions(version);
   });
 
-  // Toggle extension
   ipcMain.handle('php:toggle-extension', async (_event, version: string, ext: string, enabled: boolean) => {
     return phpService.toggleExtension(version, ext, enabled);
   });
 
-  // Download/install a PHP version
   ipcMain.handle('php:download', async (event, version: string) => {
     return phpService.downloadVersion(version, (progress) => {
       event.sender.send('php:download-progress', version, progress);
     });
   });
 
-  // Remove a PHP version
   ipcMain.handle('php:remove-version', async (_event, version: string) => {
     return phpService.removeVersion(version);
   });
 
   // ─── Application ───────────────────────────────────────────────────
 
-  // Exit application with confirmation
   ipcMain.handle('app:exit', async () => {
     if (!mainWindow) return;
 
@@ -171,7 +192,7 @@ function registerIpcHandlers(): void {
     });
 
     if (result.response === 1) {
-      // Stop all running services before quitting
+      isQuitting = true;
       await processManager.stopAllServices();
       app.quit();
     }
@@ -184,7 +205,6 @@ app.whenReady().then(() => {
   registerIpcHandlers();
   createWindow();
 
-  // macOS: re-create window when dock icon is clicked and no windows are open
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
@@ -192,7 +212,6 @@ app.whenReady().then(() => {
   });
 });
 
-// Quit when all windows are closed (except on macOS)
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
@@ -201,7 +220,15 @@ app.on('window-all-closed', () => {
 
 // Graceful shutdown: stop all services before the app quits
 app.on('before-quit', async (event) => {
+  if (isQuitting) return; // Already handled
+  isQuitting = true;
   event.preventDefault();
-  await processManager.stopAllServices();
+
+  try {
+    await processManager.stopAllServices();
+  } catch (err) {
+    console.error('Error stopping services on quit:', err);
+  }
+
   app.exit(0);
 });
