@@ -1,0 +1,20 @@
+{
+  "appId": "com.devstack.local",
+  "productName": "DevStack Local",
+  "directories": {
+    "output": "release"
+  },
+  "files": [
+    "dist/**/*",
+    "dist-electron/**/*"
+  ],
+  "win": {
+    "target": ["nsis"],
+    "icon": "public/icon.ico"
+  },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": true,
+    "allowToChangeInstallationDirectory": true
+  }
+}
