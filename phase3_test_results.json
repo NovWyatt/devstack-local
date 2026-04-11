@@ -1,0 +1,27 @@
+[
+  {
+    "name": "Create domain writes hosts and Apache vhost config",
+    "success": true,
+    "details": "hosts + vhost files generated with PHP mapping for alpha.test"
+  },
+  {
+    "name": "Duplicate hostname is rejected",
+    "success": true,
+    "details": "Hostname \"alpha.test\" is already configured"
+  },
+  {
+    "name": "Update domain rewrites files and restarts Apache when running",
+    "success": true,
+    "details": "Apache restart calls: 1"
+  },
+  {
+    "name": "Delete domain removes managed hosts entries but preserves manual entries",
+    "success": true,
+    "details": "Managed block removed while manual hosts entries remained intact"
+  },
+  {
+    "name": "Domain create succeeds even if Apache restart fails",
+    "success": true,
+    "details": "Domain gamma.test created successfully. Apache restart failed (MOCK_RESTART_FAILURE)."
+  }
+]

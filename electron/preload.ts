@@ -103,6 +103,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Remove an installed PHP version */
   phpRemoveVersion: (version: string) => ipcRenderer.invoke('php:remove-version', version),
 
+  /** List configured local domains */
+  domainsList: () => ipcRenderer.invoke('domains:list'),
+
+  /** Create a domain + vhost definition */
+  domainsCreate: (payload: { hostname: string; projectPath: string; phpVersion?: string | null }) =>
+    ipcRenderer.invoke('domains:create', payload),
+
+  /** Update an existing domain + vhost definition */
+  domainsUpdate: (
+    id: string,
+    payload: { hostname: string; projectPath: string; phpVersion?: string | null }
+  ) => ipcRenderer.invoke('domains:update', id, payload),
+
+  /** Delete a domain + vhost definition */
+  domainsDelete: (id: string) => ipcRenderer.invoke('domains:delete', id),
+
+  /** Open a domain in the default browser */
+  domainsOpen: (hostname: string) => ipcRenderer.invoke('domains:open', hostname),
+
+  /** Open native folder picker for project path */
+  domainsPickProjectPath: () => ipcRenderer.invoke('domains:pick-project-path'),
+
   /** Listen for download progress updates */
   onPhpDownloadProgress: (callback: (version: string, progress: number) => void) => {
     ipcRenderer.on('php:download-progress', (_event, version, progress) =>

@@ -3,6 +3,9 @@
  * These types are shared between the Electron main process and the React renderer.
  */
 
+import type { DomainInput, DomainOperationResult, DomainRecord } from './domain.types';
+import type { PhpExtension, PhpOperationResult, PhpVersion } from './php.types';
+
 /** Supported service identifiers */
 export type ServiceName = 'apache' | 'mysql';
 
@@ -97,6 +100,64 @@ export interface ElectronAPI {
 
   /** Remove service error listeners */
   removeServiceErrorListener: () => void;
+
+  /** Request graceful app exit (confirmation dialog in main process) */
+  exitApp: () => Promise<void>;
+
+  /** Get all available PHP versions */
+  phpGetVersions: () => Promise<PhpVersion[]>;
+
+  /** Set active PHP version */
+  phpSetActive: (version: string) => Promise<PhpOperationResult>;
+
+  /** Get active PHP version */
+  phpGetActive: () => Promise<string>;
+
+  /** Get php.ini content for a version */
+  phpGetIni: (version: string) => Promise<string>;
+
+  /** Save php.ini content for a version */
+  phpSaveIni: (version: string, content: string) => Promise<PhpOperationResult>;
+
+  /** Get extension list for a version */
+  phpGetExtensions: (version: string) => Promise<PhpExtension[]>;
+
+  /** Toggle extension state in php.ini */
+  phpToggleExtension: (
+    version: string,
+    extensionName: string,
+    enabled: boolean
+  ) => Promise<PhpOperationResult>;
+
+  /** Download/install a PHP version */
+  phpDownload: (version: string) => Promise<PhpOperationResult>;
+
+  /** Remove an installed PHP version */
+  phpRemoveVersion: (version: string) => Promise<PhpOperationResult>;
+
+  /** Subscribe to PHP download progress events */
+  onPhpDownloadProgress: (callback: (version: string, progress: number) => void) => void;
+
+  /** Remove all PHP download progress listeners */
+  removePhpDownloadProgressListener: () => void;
+
+  /** List configured domains */
+  domainsList: () => Promise<DomainRecord[]>;
+
+  /** Create a domain entry */
+  domainsCreate: (payload: DomainInput) => Promise<DomainOperationResult>;
+
+  /** Update a domain entry */
+  domainsUpdate: (id: string, payload: DomainInput) => Promise<DomainOperationResult>;
+
+  /** Delete a domain entry */
+  domainsDelete: (id: string) => Promise<DomainOperationResult>;
+
+  /** Open a configured domain in default browser */
+  domainsOpen: (hostname: string) => Promise<{ success: boolean; message: string; error?: string }>;
+
+  /** Open native directory picker and return selected path */
+  domainsPickProjectPath: () => Promise<string | null>;
 }
 
 /**

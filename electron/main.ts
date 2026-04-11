@@ -9,11 +9,12 @@
  * and proper service error broadcasting.
  */
 
-import { app, BrowserWindow, ipcMain, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
 import path from 'path';
 import { ProcessManager } from './services/process.manager';
 import { PhpService } from './services/php.service';
-import { ConfigStore } from './utils/config.store';
+import { DomainService } from './services/domain.service';
+import type { DomainInput } from '../src/types/domain.types';
 
 /** Singleton reference to the main application window */
 let mainWindow: BrowserWindow | null = null;
@@ -23,6 +24,10 @@ const processManager = new ProcessManager();
 
 /** PHP version manager */
 const phpService = new PhpService();
+phpService.setProcessManager(processManager);
+
+/** Domain and virtual host manager */
+const domainService = new DomainService(processManager, phpService);
 
 /** Track whether we're already quitting to prevent double-stop */
 let isQuitting = false;
@@ -68,9 +73,6 @@ function createWindow(): void {
 
   // Register the window with the process manager for IPC broadcasts
   processManager.setMainWindow(mainWindow);
-
-  // Wire PHP service to process manager for PHP-CGI spawning and shared log handling
-  phpService.setProcessManager(processManager);
 
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -163,6 +165,52 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('php:remove-version', async (_event, version: string) => {
     return phpService.removeVersion(version);
+  });
+
+  ipcMain.handle('domains:list', async () => {
+    return domainService.listDomains();
+  });
+
+  ipcMain.handle('domains:create', async (_event, payload: DomainInput) => {
+    return domainService.createDomain(payload);
+  });
+
+  ipcMain.handle('domains:update', async (_event, id: string, payload: DomainInput) => {
+    return domainService.updateDomain(id, payload);
+  });
+
+  ipcMain.handle('domains:delete', async (_event, id: string) => {
+    return domainService.deleteDomain(id);
+  });
+
+  ipcMain.handle('domains:open', async (_event, hostname: string) => {
+    try {
+      const normalized = hostname.trim().toLowerCase();
+      if (!/^[a-z0-9.-]+$/.test(normalized) || normalized.includes('://')) {
+        return { success: false, message: 'Invalid hostname', error: 'INVALID_HOSTNAME' };
+      }
+
+      await shell.openExternal(`http://${normalized}`);
+      return { success: true, message: `Opened ${normalized} in browser` };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { success: false, message: 'Failed to open domain in browser', error: message };
+    }
+  });
+
+  ipcMain.handle('domains:pick-project-path', async () => {
+    if (!mainWindow) return null;
+
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openDirectory'],
+      title: 'Select Project Directory',
+    });
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return null;
+    }
+
+    return result.filePaths[0];
   });
 
   // ─── Application ───────────────────────────────────────────────────

@@ -178,6 +178,31 @@ export class PhpService {
     return this.activeVersion;
   }
 
+  async ensurePhpCgiRunning(version: string): Promise<number> {
+    if (!this.processManager) {
+      throw new Error('ProcessManager not set - cannot manage PHP-CGI');
+    }
+
+    if (!this.isVersionInstalled(version)) {
+      throw new Error(`PHP ${version} is not installed`);
+    }
+
+    const processName = `php-cgi-${version}`;
+    if (this.processManager.isRunning(processName)) {
+      const knownPort = this.phpCgiPortMap.get(version) ?? this.getPhpCgiPort(version);
+      this.phpCgiPortMap.set(version, knownPort);
+      return knownPort;
+    }
+
+    await this.startPhpCgi(version);
+    const assignedPort = this.phpCgiPortMap.get(version);
+    if (!assignedPort) {
+      throw new Error(`Failed to resolve PHP-CGI port for PHP ${version}`);
+    }
+
+    return assignedPort;
+  }
+
   async startPhpCgi(version: string): Promise<void> {
     if (!this.processManager) {
       throw new Error('ProcessManager not set - cannot start PHP-CGI');

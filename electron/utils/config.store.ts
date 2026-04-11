@@ -8,6 +8,7 @@
  */
 
 import Store from 'electron-store';
+import type { DomainRecord } from '../../src/types/domain.types';
 
 /** Shape of the persisted configuration */
 export interface DevStackConfig {
@@ -28,6 +29,8 @@ export interface DevStackConfig {
   };
   /** Whether to auto-restart services on crash */
   autoRestart: boolean;
+  /** Persisted local domains and vhost definitions */
+  domains: DomainRecord[];
 }
 
 /** Default configuration values */
@@ -44,6 +47,7 @@ const defaults: DevStackConfig = {
     php: '',
   },
   autoRestart: false,
+  domains: [],
 };
 
 /**
@@ -150,5 +154,15 @@ export const ConfigStore = {
     } catch (err) {
       console.error('[ConfigStore] Failed to reset:', err);
     }
+  },
+
+  /** Get persisted domain list */
+  getDomains(): DomainRecord[] {
+    return ConfigStore.get('domains');
+  },
+
+  /** Persist domain list */
+  setDomains(domains: DomainRecord[]): void {
+    ConfigStore.set('domains', domains);
   },
 };

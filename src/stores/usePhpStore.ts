@@ -127,8 +127,7 @@ interface PhpStore {
 
 /** Access the Electron PHP API, if available */
 function getPhpApi() {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (window as any).electronAPI;
+  return window.electronAPI;
 }
 
 export const usePhpStore = create<PhpStore>((set, get) => ({
