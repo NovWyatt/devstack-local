@@ -1,31 +1,25 @@
 /**
- * PHP Service Manager — Real Implementation
+ * PHP service manager.
  *
- * Manages PHP versions, php.ini configuration, extensions, and PHP-CGI processes.
- *
- * Features:
- * - Scans resources/binaries/php/{version}/ for installed versions
- * - Reads/writes real php.ini files from disk with backup
- * - Spawns php-cgi.exe -b 127.0.0.1:{port} per active version
- * - Dynamic port assignment based on version
- * - On version switch: kills old PHP-CGI, starts new one
- * - Download still simulated (directory creation; real download in Phase 4)
- * - Persists state via ConfigStore
+ * Handles:
+ * - installed version discovery
+ * - active version switching
+ * - php.ini read/write
+ * - extension toggles
+ * - PHP-CGI process lifecycle
  */
 
-import path from 'path';
 import fs from 'fs';
-import { app } from 'electron';
-import type { PhpVersion, PhpExtension, PhpOperationResult } from '../../src/types/php.types';
-import { isPortAvailable } from '../utils/port.util';
+import path from 'path';
+import electron from 'electron';
+import type { PhpExtension, PhpOperationResult, PhpVersion } from '../../src/types/php.types';
 import { ConfigStore } from '../utils/config.store';
-
-/** Forward reference to ProcessManager for PHP-CGI spawning */
+import { findAvailablePort, isPortAvailable, isPortListening } from '../utils/port.util';
+import { retryOrThrow } from '../utils/retry.util';
 import type { ProcessManager } from './process.manager';
 
 type LogEmitter = (level: string, message: string) => void;
 
-/** Default php.ini content for new installations */
 const DEFAULT_PHP_INI = `[PHP]
 engine = On
 short_open_tag = Off
@@ -61,7 +55,6 @@ mysqli.default_user =
 mysqli.default_pw =
 
 [Extensions]
-; Uncomment to enable extensions
 extension=mysqli
 extension=pdo_mysql
 extension=mbstring
@@ -74,7 +67,6 @@ extension=openssl
 ;extension=soap
 `;
 
-/** Version catalog — available for download */
 const VERSION_CATALOG: Array<{ version: string; size: string }> = [
   { version: '8.5.1', size: '32 MB' },
   { version: '8.5.0', size: '32 MB' },
@@ -83,7 +75,6 @@ const VERSION_CATALOG: Array<{ version: string; size: string }> = [
   { version: '5.6.9', size: '24 MB' },
 ];
 
-/** Common PHP extensions with metadata */
 const COMMON_EXTENSIONS: PhpExtension[] = [
   { name: 'mysqli', description: 'MySQL improved extension', required: true, enabled: true },
   { name: 'pdo_mysql', description: 'PDO MySQL driver', required: true, enabled: true },
@@ -102,113 +93,103 @@ export class PhpService {
   private logEmitter: LogEmitter | null = null;
   private processManager: ProcessManager | null = null;
 
-  /** In-memory cache for php.ini content (only used when real files don't exist) */
   private phpIniCache: Map<string, string> = new Map();
+  private phpCgiPortMap: Map<string, number> = new Map();
 
   constructor() {
-    // Restore active version from persistent store
     this.activeVersion = ConfigStore.getActivePhpVersion();
   }
 
-  /** Set ProcessManager reference for PHP-CGI spawning */
   setProcessManager(pm: ProcessManager): void {
     this.processManager = pm;
   }
 
-  /** Register a log emitter callback */
   setLogEmitter(emitter: LogEmitter): void {
     this.logEmitter = emitter;
   }
 
-  // ─── Version Management ───────────────────────────────────────────
-
-  /**
-   * Get the list of all available PHP versions.
-   * Scans both the catalog and the file system for installed versions.
-   */
   async getAvailableVersions(): Promise<PhpVersion[]> {
     const installedOnDisk = this.scanInstalledVersions();
+    const installedFromStore = ConfigStore.getInstalledPhpVersions();
+    const allInstalled = new Set([...installedOnDisk, ...installedFromStore]);
 
-    // Merge saved installed versions with disk scan
-    const savedInstalled = ConfigStore.getInstalledPhpVersions();
-    const allInstalled = new Set([...installedOnDisk, ...savedInstalled]);
-
-    return VERSION_CATALOG.map((v) => ({
-      version: v.version,
-      path: allInstalled.has(v.version)
-        ? this.getVersionDir(v.version)
-        : '',
-      installed: allInstalled.has(v.version),
-      active: v.version === this.activeVersion,
-      size: v.size,
-      downloadUrl: `https://windows.php.net/downloads/releases/php-${v.version}-Win32-vs16-x64.zip`,
+    return VERSION_CATALOG.map((item) => ({
+      version: item.version,
+      path: allInstalled.has(item.version) ? this.getVersionDir(item.version) : '',
+      installed: allInstalled.has(item.version),
+      active: item.version === this.activeVersion,
+      size: item.size,
+      downloadUrl: `https://windows.php.net/downloads/releases/php-${item.version}-Win32-vs16-x64.zip`,
     }));
   }
 
-  /**
-   * Set the active PHP version.
-   * Stops the old PHP-CGI process and starts a new one.
-   */
   async setActiveVersion(version: string): Promise<PhpOperationResult> {
-    const installed = this.isVersionInstalled(version);
-    if (!installed) {
+    if (!this.isVersionInstalled(version)) {
       return { success: false, message: `PHP ${version} is not installed`, error: 'NOT_INSTALLED' };
     }
 
-    const previousVersion = this.activeVersion;
-    this.emitLog('system', `Switching PHP version from ${previousVersion} to ${version}...`);
-
-    // Stop old PHP-CGI process if running
-    if (this.processManager) {
-      const oldProcessName = `php-cgi-${previousVersion}`;
-      if (this.processManager.isRunning(oldProcessName)) {
-        this.emitLog('system', `Stopping PHP-CGI for ${previousVersion}...`);
-        await this.processManager.stopProcess(oldProcessName);
-      }
+    if (version === this.activeVersion) {
+      return { success: true, message: `PHP ${version} is already active` };
     }
 
-    this.activeVersion = version;
-    ConfigStore.setActivePhpVersion(version);
+    const previousVersion = this.activeVersion;
+    const previousProcessName = `php-cgi-${previousVersion}`;
+    const previousProcessWasRunning =
+      !!this.processManager && this.processManager.isRunning(previousProcessName);
 
-    // Start new PHP-CGI process
-    await this.startPhpCgi(version);
+    this.emitLog('system', `Switching PHP version from ${previousVersion} to ${version}...`);
 
-    this.emitLog('success', `PHP ${version} is now active`);
-    return { success: true, message: `PHP ${version} activated successfully` };
+    if (previousProcessWasRunning && this.processManager) {
+      await this.processManager.stopProcess(previousProcessName);
+    }
+
+    try {
+      await this.startPhpCgi(version);
+      this.activeVersion = version;
+      ConfigStore.setActivePhpVersion(version);
+      this.emitLog('success', `PHP ${version} is now active`);
+      return { success: true, message: `PHP ${version} activated successfully` };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+
+      if (previousProcessWasRunning) {
+        try {
+          await this.startPhpCgi(previousVersion);
+        } catch (restoreError) {
+          this.emitLog(
+            'warning',
+            `Failed to restore PHP-CGI ${previousVersion}: ${
+              restoreError instanceof Error ? restoreError.message : String(restoreError)
+            }`
+          );
+        }
+      }
+
+      if (this.processManager) {
+        this.processManager.broadcastError('php', message);
+      }
+
+      this.emitLog('error', `Failed to activate PHP ${version}: ${message}`);
+      return { success: false, message: `Failed to activate PHP ${version}`, error: message };
+    }
   }
 
-  /** Get the currently active PHP version string */
   getActiveVersion(): string {
     return this.activeVersion;
   }
 
-  // ─── PHP-CGI Process Management ───────────────────────────────────
-
-  /**
-   * Start a PHP-CGI FastCGI process for the given version.
-   * Binds to 127.0.0.1:{port} where port is derived from version.
-   */
   async startPhpCgi(version: string): Promise<void> {
     if (!this.processManager) {
-      this.emitLog('warning', 'ProcessManager not set — cannot start PHP-CGI');
-      return;
+      throw new Error('ProcessManager not set - cannot start PHP-CGI');
     }
 
     const phpCgiPath = this.getPhpCgiPath(version);
-    if (!phpCgiPath || !fs.existsSync(phpCgiPath)) {
-      this.emitLog('warning', `php-cgi.exe not found for PHP ${version}`);
-      return;
+    if (!phpCgiPath) {
+      throw new Error(`php-cgi.exe not found for PHP ${version}`);
     }
 
-    const port = this.getPhpCgiPort(version);
     const processName = `php-cgi-${version}`;
-
-    // Check port availability
-    const available = await isPortAvailable(port);
-    if (!available) {
-      this.emitLog('error', `Port ${port} is already in use for PHP-CGI ${version}`);
-      return;
-    }
+    const port = await this.resolvePhpCgiPort(version);
 
     this.emitLog('system', `Starting PHP-CGI ${version} on 127.0.0.1:${port}...`);
 
@@ -219,22 +200,34 @@ export class PhpService {
       {
         cwd: path.dirname(phpCgiPath),
         windowsHide: true,
-      }
+      },
+      true,
+      { port, host: '127.0.0.1' }
     );
 
-    // Verify it started
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    try {
+      await retryOrThrow(
+        async () => {
+          if (!this.processManager) return false;
+          if (!this.processManager.isRunning(processName)) return false;
+          return isPortListening(port, '127.0.0.1', 1000);
+        },
+        { attempts: 5, delayMs: 250 },
+        `PHP-CGI ${version} failed runtime validation on 127.0.0.1:${port}`
+      );
 
-    if (this.processManager.isRunning(processName)) {
+      this.phpCgiPortMap.set(version, port);
+      this.processManager.resetRestartAttempts(processName);
       this.emitLog('success', `PHP-CGI ${version} listening on 127.0.0.1:${port}`);
-    } else {
-      this.emitLog('warning', `PHP-CGI ${version} may not have started correctly`);
+    } catch (error) {
+      if (this.processManager.isRunning(processName)) {
+        await this.processManager.stopProcess(processName);
+      }
+      this.phpCgiPortMap.delete(version);
+      throw error instanceof Error ? error : new Error(String(error));
     }
   }
 
-  /**
-   * Stop the PHP-CGI process for a given version.
-   */
   async stopPhpCgi(version: string): Promise<void> {
     if (!this.processManager) return;
 
@@ -243,111 +236,50 @@ export class PhpService {
       await this.processManager.stopProcess(processName);
       this.emitLog('system', `PHP-CGI ${version} stopped`);
     }
+
+    this.phpCgiPortMap.delete(version);
   }
 
-  /**
-   * Get the PHP-CGI port for a given version.
-   * Maps major.minor to port: 7.4 → 9074, 8.3 → 9083, 8.5 → 9085
-   */
-  private getPhpCgiPort(version: string): number {
-    const parts = version.split('.');
-    if (parts.length >= 2) {
-      const major = parseInt(parts[0], 10);
-      const minor = parseInt(parts[1], 10);
-      return 9000 + (major * 10) + minor;
-    }
-    return 9000;
-  }
-
-  /** Get path to php-cgi.exe for a version */
-  private getPhpCgiPath(version: string): string | null {
-    const versionDir = this.getVersionDir(version);
-    if (!versionDir) return null;
-    const cgiPath = path.join(versionDir, 'php-cgi.exe');
-    return fs.existsSync(cgiPath) ? cgiPath : null;
-  }
-
-  // ─── php.ini Management ───────────────────────────────────────────
-
-  /**
-   * Get php.ini content for a specific version.
-   * Reads from disk if available, falls back to cache or default.
-   */
   async getPhpIniContent(version: string): Promise<string> {
-    // Try reading from disk first
     const iniPath = this.getPhpIniPath(version);
     if (iniPath && fs.existsSync(iniPath)) {
       try {
         return fs.readFileSync(iniPath, 'utf-8');
-      } catch (err) {
-        this.emitLog('warning', `Could not read php.ini from ${iniPath}: ${err}`);
+      } catch (error) {
+        this.emitLog('warning', `Could not read php.ini from ${iniPath}: ${String(error)}`);
       }
     }
 
-    // Fall back to cache or default
     return this.phpIniCache.get(version) ?? DEFAULT_PHP_INI;
   }
 
-  /**
-   * Save php.ini content for a specific version.
-   * Creates a backup before overwriting.
-   */
   async savePhpIniContent(version: string, content: string): Promise<PhpOperationResult> {
     try {
       this.emitLog('system', `Saving php.ini for PHP ${version}...`);
-
       const iniPath = this.getPhpIniPath(version);
 
       if (iniPath) {
-        // Create backup
         if (fs.existsSync(iniPath)) {
           const backupPath = `${iniPath}.bak`;
           fs.copyFileSync(iniPath, backupPath);
           this.emitLog('system', `Backup created: ${backupPath}`);
         }
 
-        // Write new content
         fs.writeFileSync(iniPath, content, 'utf-8');
         this.emitLog('success', `php.ini saved to ${iniPath}`);
       } else {
-        // Save to cache if no disk path available
         this.phpIniCache.set(version, content);
         this.emitLog('success', `php.ini saved to memory for PHP ${version}`);
       }
 
       return { success: true, message: 'php.ini saved successfully' };
     } catch (error) {
-      const msg = error instanceof Error ? error.message : 'Unknown error';
-      this.emitLog('error', `Failed to save php.ini: ${msg}`);
-      return { success: false, message: 'Failed to save php.ini', error: msg };
+      const message = error instanceof Error ? error.message : String(error);
+      this.emitLog('error', `Failed to save php.ini: ${message}`);
+      return { success: false, message: 'Failed to save php.ini', error: message };
     }
   }
 
-  /** Get the php.ini file path for a version */
-  private getPhpIniPath(version: string): string | null {
-    const versionDir = this.getVersionDir(version);
-    if (!versionDir) return null;
-
-    // Check for php.ini, then php.ini-development
-    const candidates = [
-      path.join(versionDir, 'php.ini'),
-      path.join(versionDir, 'php.ini-development'),
-    ];
-
-    for (const p of candidates) {
-      if (fs.existsSync(p)) return p;
-    }
-
-    // Return the standard path even if it doesn't exist yet (for saving)
-    return path.join(versionDir, 'php.ini');
-  }
-
-  // ─── Extension Management ─────────────────────────────────────────
-
-  /**
-   * Get the list of extensions for a specific version.
-   * Parses the php.ini content to determine enabled status.
-   */
   async getExtensions(version: string): Promise<PhpExtension[]> {
     const iniContent = await this.getPhpIniContent(version);
 
@@ -366,9 +298,6 @@ export class PhpService {
     });
   }
 
-  /**
-   * Toggle a PHP extension on or off by modifying php.ini.
-   */
   async toggleExtension(
     version: string,
     extensionName: string,
@@ -376,38 +305,17 @@ export class PhpService {
   ): Promise<PhpOperationResult> {
     const iniContent = await this.getPhpIniContent(version);
 
-    let updatedContent: string;
-    if (enabled) {
-      updatedContent = iniContent.replace(
-        new RegExp(`^;extension=${extensionName}`, 'm'),
-        `extension=${extensionName}`
-      );
-    } else {
-      updatedContent = iniContent.replace(
-        new RegExp(`^extension=${extensionName}`, 'm'),
-        `;extension=${extensionName}`
-      );
-    }
+    const updatedContent = enabled
+      ? iniContent.replace(new RegExp(`^;extension=${extensionName}`, 'm'), `extension=${extensionName}`)
+      : iniContent.replace(new RegExp(`^extension=${extensionName}`, 'm'), `;extension=${extensionName}`);
 
-    // Save the modified content
     await this.savePhpIniContent(version, updatedContent);
 
     const action = enabled ? 'enabled' : 'disabled';
     this.emitLog('success', `Extension ${extensionName} ${action} for PHP ${version}`);
-
-    return {
-      success: true,
-      message: `Extension ${extensionName} ${action}`,
-    };
+    return { success: true, message: `Extension ${extensionName} ${action}` };
   }
 
-  // ─── Download / Install ───────────────────────────────────────────
-
-  /**
-   * Download and install a PHP version.
-   * Currently simulated — creates directory structure.
-   * Real binary download will be implemented in Phase 4.
-   */
   async downloadVersion(
     version: string,
     onProgress: (percent: number) => void
@@ -418,31 +326,27 @@ export class PhpService {
 
     this.emitLog('system', `Downloading PHP ${version}...`);
 
-    // Simulate download progress
-    for (let i = 0; i <= 100; i += 5) {
-      await new Promise((resolve) => setTimeout(resolve, 150));
-      onProgress(i);
+    for (let progress = 0; progress <= 100; progress += 5) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 150);
+      });
+      onProgress(progress);
     }
 
-    // Create version directory structure
     const versionDir = this.getVersionDir(version) || this.createVersionDir(version);
     if (versionDir) {
-      // Write default php.ini
       const iniPath = path.join(versionDir, 'php.ini');
       if (!fs.existsSync(iniPath)) {
         try {
           fs.writeFileSync(iniPath, DEFAULT_PHP_INI, 'utf-8');
         } catch {
-          // Store in cache if disk write fails
           this.phpIniCache.set(version, DEFAULT_PHP_INI);
         }
       }
     } else {
-      // Fallback: store in memory
       this.phpIniCache.set(version, DEFAULT_PHP_INI);
     }
 
-    // Update persistent store
     const installed = ConfigStore.getInstalledPhpVersions();
     if (!installed.includes(version)) {
       ConfigStore.setInstalledPhpVersions([...installed, version]);
@@ -452,9 +356,6 @@ export class PhpService {
     return { success: true, message: `PHP ${version} installed successfully` };
   }
 
-  /**
-   * Remove an installed PHP version.
-   */
   async removeVersion(version: string): Promise<PhpOperationResult> {
     if (!this.isVersionInstalled(version)) {
       return { success: false, message: `PHP ${version} is not installed`, error: 'NOT_INSTALLED' };
@@ -463,69 +364,102 @@ export class PhpService {
       return { success: false, message: 'Cannot remove the active PHP version', error: 'IS_ACTIVE' };
     }
 
-    // Stop PHP-CGI if running
     await this.stopPhpCgi(version);
 
-    // Remove from persistent store
     const installed = ConfigStore.getInstalledPhpVersions();
-    ConfigStore.setInstalledPhpVersions(installed.filter((v) => v !== version));
-
-    // Remove cached content
+    ConfigStore.setInstalledPhpVersions(installed.filter((item) => item !== version));
     this.phpIniCache.delete(version);
+    this.phpCgiPortMap.delete(version);
 
     this.emitLog('success', `PHP ${version} removed`);
     return { success: true, message: `PHP ${version} removed successfully` };
   }
 
-  // ─── Internal Helpers ─────────────────────────────────────────────
+  private getPhpCgiPort(version: string): number {
+    const parts = version.split('.');
+    if (parts.length >= 2) {
+      const major = parseInt(parts[0], 10);
+      const minor = parseInt(parts[1], 10);
+      if (!Number.isNaN(major) && !Number.isNaN(minor)) {
+        return 9000 + (major * 100) + minor;
+      }
+    }
+    return 9000;
+  }
 
-  /** Scan the file system for installed PHP versions */
+  private async resolvePhpCgiPort(version: string): Promise<number> {
+    const preferredPort = this.getPhpCgiPort(version);
+    const preferredAvailable = await isPortAvailable(preferredPort, '127.0.0.1');
+    if (preferredAvailable) {
+      return preferredPort;
+    }
+
+    const fallbackPort = await findAvailablePort(preferredPort + 1, '127.0.0.1', 50);
+    this.emitLog(
+      'warning',
+      `Preferred PHP-CGI port ${preferredPort} is busy for PHP ${version}; using ${fallbackPort}`
+    );
+    return fallbackPort;
+  }
+
+  private getPhpCgiPath(version: string): string | null {
+    const versionDir = this.getVersionDir(version);
+    const cgiPath = path.join(versionDir, 'php-cgi.exe');
+    return fs.existsSync(cgiPath) ? cgiPath : null;
+  }
+
+  private getPhpIniPath(version: string): string | null {
+    const versionDir = this.getVersionDir(version);
+    const candidates = [path.join(versionDir, 'php.ini'), path.join(versionDir, 'php.ini-development')];
+
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) return candidate;
+    }
+
+    return path.join(versionDir, 'php.ini');
+  }
+
   private scanInstalledVersions(): string[] {
-    const phpBaseDirs = this.getPhpBaseDirs();
     const versions: string[] = [];
 
-    for (const baseDir of phpBaseDirs) {
+    for (const baseDir of this.getPhpBaseDirs()) {
       if (!fs.existsSync(baseDir)) continue;
 
       try {
         const entries = fs.readdirSync(baseDir, { withFileTypes: true });
         for (const entry of entries) {
-          if (entry.isDirectory()) {
-            // Check if it contains php.exe or php-cgi.exe
-            const phpExe = path.join(baseDir, entry.name, 'php.exe');
-            const phpCgi = path.join(baseDir, entry.name, 'php-cgi.exe');
-            if (fs.existsSync(phpExe) || fs.existsSync(phpCgi)) {
-              versions.push(entry.name);
-            }
+          if (!entry.isDirectory()) continue;
+
+          const versionDir = path.join(baseDir, entry.name);
+          const phpExe = path.join(versionDir, 'php.exe');
+          const phpCgiExe = path.join(versionDir, 'php-cgi.exe');
+          if (fs.existsSync(phpExe) || fs.existsSync(phpCgiExe)) {
+            versions.push(entry.name);
           }
         }
       } catch {
-        // Directory not readable
+        // Ignore unreadable directories.
       }
     }
 
     return versions;
   }
 
-  /** Check if a version is installed (on disk or in persistent store) */
   private isVersionInstalled(version: string): boolean {
-    const onDisk = this.scanInstalledVersions();
-    const saved = ConfigStore.getInstalledPhpVersions();
-    return onDisk.includes(version) || saved.includes(version);
+    const installedOnDisk = this.scanInstalledVersions();
+    const installedFromStore = ConfigStore.getInstalledPhpVersions();
+    return installedOnDisk.includes(version) || installedFromStore.includes(version);
   }
 
-  /** Get the directory path for a PHP version */
   private getVersionDir(version: string): string {
-    const baseDirs = this.getPhpBaseDirs();
-    for (const baseDir of baseDirs) {
+    for (const baseDir of this.getPhpBaseDirs()) {
       const versionDir = path.join(baseDir, version);
       if (fs.existsSync(versionDir)) return versionDir;
     }
-    // Return default path even if doesn't exist
+
     return path.join(this.getPhpBaseDirs()[0], version);
   }
 
-  /** Create a version directory for new installation */
   private createVersionDir(version: string): string | null {
     try {
       const baseDir = this.getPhpBaseDirs()[0];
@@ -537,24 +471,25 @@ export class PhpService {
     }
   }
 
-  /** Get PHP base directories to scan */
   private getPhpBaseDirs(): string[] {
     const dirs: string[] = [];
-
-    // Custom path from config
     const savedPath = ConfigStore.getBinaryPath('php');
-    if (savedPath) dirs.push(savedPath);
+    if (savedPath) {
+      dirs.push(savedPath);
+    }
 
-    // Project paths
+    const appPath =
+      (electron as unknown as { app?: { getAppPath?: () => string } }).app?.getAppPath?.() ??
+      process.cwd();
+
     dirs.push(
-      path.join(app?.getAppPath?.() ?? process.cwd(), 'resources', 'binaries', 'php'),
+      path.join(appPath, 'resources', 'binaries', 'php'),
       path.join(process.cwd(), 'resources', 'binaries', 'php')
     );
 
     return dirs;
   }
 
-  /** Emit a log message */
   private emitLog(level: string, message: string): void {
     if (this.processManager) {
       this.processManager.broadcastLog(level, message);

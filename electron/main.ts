@@ -69,19 +69,8 @@ function createWindow(): void {
   // Register the window with the process manager for IPC broadcasts
   processManager.setMainWindow(mainWindow);
 
-  // Wire PHP service to process manager for PHP-CGI spawning and logging
+  // Wire PHP service to process manager for PHP-CGI spawning and shared log handling
   phpService.setProcessManager(processManager);
-  phpService.setLogEmitter((level, message) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      const logEntry = {
-        id: `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
-        timestamp: new Date(),
-        level,
-        message,
-      };
-      mainWindow.webContents.send('log:entry', logEntry);
-    }
-  });
 
   mainWindow.on('closed', () => {
     mainWindow = null;

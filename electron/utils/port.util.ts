@@ -37,6 +37,40 @@ export function isPortAvailable(port: number, host: string = '127.0.0.1'): Promi
 }
 
 /**
+ * Check if a TCP port is actively listening.
+ * Attempts to connect to the target host/port and resolves true on success.
+ *
+ * @param port - Port number to probe
+ * @param host - Host to connect to (default: '127.0.0.1')
+ * @param timeoutMs - Connection timeout in milliseconds (default: 1000)
+ * @returns true if a listener accepts the connection, false otherwise
+ */
+export function isPortListening(
+  port: number,
+  host: string = '127.0.0.1',
+  timeoutMs: number = 1000
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    let settled = false;
+
+    const finalize = (result: boolean): void => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(result);
+    };
+
+    socket.setTimeout(timeoutMs);
+    socket.once('connect', () => finalize(true));
+    socket.once('timeout', () => finalize(false));
+    socket.once('error', () => finalize(false));
+
+    socket.connect(port, host);
+  });
+}
+
+/**
  * Find the next available port starting from the given port.
  * Scans sequentially until a free port is found.
  *

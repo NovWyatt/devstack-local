@@ -1,38 +1,28 @@
 /**
- * MySQL Service Manager — Real Implementation
- *
- * Manages the MySQL Server (mysqld.exe) lifecycle on Windows.
- * Handles data directory initialization, port conflicts,
- * graceful shutdown via mysqladmin, and fallback force-kill.
- *
- * Features:
- * - Real process spawning via ProcessManager
- * - Auto data directory initialization (--initialize-insecure)
- * - Port conflict detection
- * - Graceful shutdown via mysqladmin
- * - Fallback to tree-kill if mysqladmin fails
- * - stderr log streaming (MySQL logs to stderr)
+ * MySQL service lifecycle manager.
  */
 
 import path from 'path';
 import fs from 'fs';
 import { execFile } from 'child_process';
-import { app } from 'electron';
+import electron from 'electron';
 import type { ServiceState } from '../../src/types';
-import { isPortAvailable, getPortConflictMessage } from '../utils/port.util';
+import { assertExecutable } from '../utils/binary.util';
 import { ConfigStore } from '../utils/config.store';
-
+import { getPortConflictMessage, isPortAvailable, isPortListening } from '../utils/port.util';
+import { retryCheck, retryOrThrow } from '../utils/retry.util';
 import type { ProcessManager } from './process.manager';
 
-/** Callback type for emitting log messages */
 type LogEmitter = (level: string, message: string) => void;
 
 const PROCESS_NAME = 'mysql';
+const STARTUP_RETRY_ATTEMPTS = 5;
+const STARTUP_RETRY_DELAY_MS = 500;
 
 export class MySQLService {
   private status: 'running' | 'stopped' | 'starting' | 'stopping' = 'stopped';
-  private version: string = '8.0';
-  private port: number = 3306;
+  private version = '8.0';
+  private port = 3306;
   private pid: number | undefined;
   private processManager: ProcessManager;
   private logEmitter: LogEmitter | null = null;
@@ -47,16 +37,6 @@ export class MySQLService {
     this.logEmitter = emitter;
   }
 
-  /**
-   * Start the MySQL Server.
-   *
-   * 1. Checks if already running
-   * 2. Resolves binary path
-   * 3. Initializes data directory if missing
-   * 4. Checks port availability
-   * 5. Spawns mysqld.exe
-   * 6. Waits for successful startup
-   */
   async start(version?: string, port?: number): Promise<void> {
     if (this.status === 'running' || this.status === 'starting') {
       throw new Error('MySQL is already running');
@@ -72,7 +52,6 @@ export class MySQLService {
 
     this.emitLog('system', 'Starting MySQL Database Server...');
 
-    // ── Resolve binary path ──────────────────────────────────────
     this.mysqldPath = this.resolveBinaryPath();
     if (!this.mysqldPath) {
       this.status = 'stopped';
@@ -81,50 +60,44 @@ export class MySQLService {
       );
     }
 
+    assertExecutable(this.mysqldPath, 'MySQL');
     this.emitLog('system', `Binary: ${this.mysqldPath}`);
 
-    const mysqlBaseDir = path.dirname(path.dirname(this.mysqldPath)); // up from bin/mysqld.exe
+    const mysqlBaseDir = path.dirname(path.dirname(this.mysqldPath));
     const dataDir = path.join(mysqlBaseDir, 'data');
 
-    // ── Initialize data directory if missing ─────────────────────
-    if (!fs.existsSync(dataDir) || this.isDataDirEmpty(dataDir)) {
-      this.emitLog('system', 'Data directory missing or empty, initializing...');
+    // Safety: only initialize when directory does not exist.
+    if (!fs.existsSync(dataDir)) {
+      this.emitLog('system', 'Data directory not found, initializing...');
       await this.initializeDataDir(this.mysqldPath, dataDir, mysqlBaseDir);
+    } else {
+      this.emitLog('system', `Data directory exists, skipping initialization: ${dataDir}`);
     }
 
-    // ── Check port availability ──────────────────────────────────
     const portAvailable = await isPortAvailable(this.port);
     if (!portAvailable) {
       this.status = 'stopped';
-      const msg = getPortConflictMessage(this.port, 'MySQL');
-      this.emitLog('error', msg);
-      throw new Error(msg);
+      const message = getPortConflictMessage(this.port, 'MySQL');
+      this.emitLog('error', message);
+      throw new Error(message);
     }
 
-    this.emitLog('system', `Port ${this.port} is available`);
-
-    // ── Build args ───────────────────────────────────────────────
     const args: string[] = [
       `--basedir=${mysqlBaseDir}`,
       `--datadir=${dataDir}`,
       `--port=${this.port}`,
-      '--console', // Log to stderr instead of file
+      '--console',
     ];
 
-    // Check for my.ini / my.cnf
-    const configPaths = [
-      path.join(mysqlBaseDir, 'my.ini'),
-      path.join(mysqlBaseDir, 'my.cnf'),
-    ];
-    for (const cfgPath of configPaths) {
-      if (fs.existsSync(cfgPath)) {
-        args.unshift(`--defaults-file=${cfgPath}`);
-        this.emitLog('system', `Using config: ${cfgPath}`);
+    const configPaths = [path.join(mysqlBaseDir, 'my.ini'), path.join(mysqlBaseDir, 'my.cnf')];
+    for (const configPath of configPaths) {
+      if (fs.existsSync(configPath)) {
+        args.unshift(`--defaults-file=${configPath}`);
+        this.emitLog('system', `Using config: ${configPath}`);
         break;
       }
     }
 
-    // ── Spawn the process ────────────────────────────────────────
     try {
       const child = this.processManager.startProcess(
         PROCESS_NAME,
@@ -133,41 +106,45 @@ export class MySQLService {
         {
           cwd: mysqlBaseDir,
           windowsHide: true,
-        }
+        },
+        true,
+        { port: this.port, host: '127.0.0.1' }
       );
 
       this.pid = child.pid;
 
-      // MySQL takes longer to start — wait 3 seconds then verify
-      this.emitLog('system', 'Waiting for MySQL to initialize...');
-      await new Promise((resolve) => setTimeout(resolve, 3000));
+      await retryOrThrow(
+        async () => {
+          if (!this.processManager.isRunning(PROCESS_NAME)) {
+            return false;
+          }
+          return isPortListening(this.port, '127.0.0.1', 1000);
+        },
+        {
+          attempts: STARTUP_RETRY_ATTEMPTS,
+          delayMs: STARTUP_RETRY_DELAY_MS,
+        },
+        `MySQL failed runtime validation on 127.0.0.1:${this.port}`
+      );
 
-      if (this.processManager.isRunning(PROCESS_NAME)) {
-        this.status = 'running';
-        this.pid = this.processManager.getProcessPid(PROCESS_NAME);
-        this.emitLog('success', `MySQL started successfully (PID: ${this.pid})`);
-        this.emitLog('success', `Accepting connections on port ${this.port}`);
-      } else {
-        this.status = 'stopped';
-        this.pid = undefined;
-        throw new Error('MySQL process exited immediately. Check the error log for details.');
-      }
+      this.status = 'running';
+      this.pid = this.processManager.getProcessPid(PROCESS_NAME);
+      this.processManager.resetRestartAttempts(PROCESS_NAME);
+      this.emitLog('success', `MySQL started successfully (PID: ${this.pid})`);
+      this.emitLog('success', `MySQL accepts TCP connections on port ${this.port}`);
     } catch (error) {
+      if (this.processManager.isRunning(PROCESS_NAME)) {
+        await this.processManager.stopProcess(PROCESS_NAME);
+      }
       this.status = 'stopped';
       this.pid = undefined;
-      if (error instanceof Error && error.message.includes('exited immediately')) {
-        throw error;
-      }
-      throw new Error(`Failed to spawn MySQL: ${error instanceof Error ? error.message : String(error)}`);
+
+      const message = error instanceof Error ? error.message : String(error);
+      this.emitLog('error', `MySQL startup failed: ${message}`);
+      throw new Error(message);
     }
   }
 
-  /**
-   * Stop the MySQL Server.
-   *
-   * Attempts graceful shutdown via mysqladmin first.
-   * Falls back to tree-kill if mysqladmin fails or times out.
-   */
   async stop(): Promise<void> {
     if (this.status === 'stopped') {
       throw new Error('MySQL is not running');
@@ -177,35 +154,30 @@ export class MySQLService {
     this.emitLog('system', 'Stopping MySQL Database Server...');
 
     const previousPid = this.pid;
-
-    // Try graceful shutdown via mysqladmin
+    this.processManager.markProcessIntentionalStop(PROCESS_NAME);
     const graceful = await this.gracefulShutdown();
 
     if (!graceful) {
-      this.emitLog('warning', 'Graceful shutdown failed, using force kill...');
-      await this.processManager.stopProcess(PROCESS_NAME, 5000);
+      this.emitLog('warning', 'Graceful shutdown failed, forcing process stop...');
     }
+
+    // Always finalize via ProcessManager so restart timers are cleared and
+    // tracking state is removed even when mysqladmin already exited mysqld.
+    await this.processManager.stopProcess(PROCESS_NAME, graceful ? 2000 : 5000);
 
     this.status = 'stopped';
     this.pid = undefined;
-    this.emitLog('success', `MySQL stopped (PID: ${previousPid})`);
+    this.emitLog('success', `MySQL stopped (PID: ${previousPid ?? 'unknown'})`);
   }
 
-  /**
-   * Restart MySQL.
-   */
   async restart(): Promise<void> {
     this.emitLog('system', 'Restarting MySQL...');
     if (this.status === 'running') {
       await this.stop();
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
     await this.start();
   }
 
-  /**
-   * Get the current status.
-   */
   getStatus(): ServiceState {
     if (this.status === 'running' && !this.processManager.isRunning(PROCESS_NAME)) {
       this.status = 'stopped';
@@ -220,98 +192,96 @@ export class MySQLService {
     };
   }
 
-  // ─── Internal Helpers ─────────────────────────────────────────────
-
-  /**
-   * Attempt graceful shutdown using mysqladmin.
-   * Returns true if successful, false if failed.
-   */
   private async gracefulShutdown(): Promise<boolean> {
-    const mysqladminPath = this.mysqldPath
-      ? path.join(path.dirname(this.mysqldPath), 'mysqladmin.exe')
-      : null;
-
-    if (!mysqladminPath || !fs.existsSync(mysqladminPath)) {
+    if (!this.mysqldPath) {
       return false;
     }
 
-    return new Promise<boolean>((resolve) => {
-      const timeout = setTimeout(() => resolve(false), 5000);
+    const mysqladminPath = path.join(path.dirname(this.mysqldPath), 'mysqladmin.exe');
+    try {
+      assertExecutable(mysqladminPath, 'MySQL admin');
+    } catch (error) {
+      this.emitLog(
+        'warning',
+        `mysqladmin unavailable for graceful shutdown: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      return false;
+    }
 
+    const commandSucceeded = await new Promise<boolean>((resolve) => {
       execFile(
         mysqladminPath,
         ['--port', String(this.port), '-u', 'root', 'shutdown'],
-        { windowsHide: true },
+        { windowsHide: true, timeout: 5000 },
         (error) => {
-          clearTimeout(timeout);
           if (error) {
             this.emitLog('warning', `mysqladmin shutdown failed: ${error.message}`);
             resolve(false);
           } else {
-            this.emitLog('system', 'MySQL shutdown via mysqladmin successful');
-            // Wait for process to fully exit
-            setTimeout(() => resolve(true), 1000);
+            resolve(true);
           }
         }
       );
     });
+
+    if (!commandSucceeded) {
+      return false;
+    }
+
+    const stopped = await retryCheck(
+      async () => !this.processManager.isRunning(PROCESS_NAME),
+      { attempts: 10, delayMs: 200 }
+    );
+
+    if (stopped) {
+      this.emitLog('system', 'MySQL shutdown via mysqladmin successful');
+      return true;
+    }
+
+    this.emitLog('warning', 'mysqladmin command succeeded but mysqld did not exit in time');
+    return false;
   }
 
-  /**
-   * Initialize the MySQL data directory for first-time setup.
-   */
   private async initializeDataDir(
     mysqldPath: string,
     dataDir: string,
     baseDir: string
   ): Promise<void> {
-    // Create data directory if it doesn't exist
     if (!fs.existsSync(dataDir)) {
       fs.mkdirSync(dataDir, { recursive: true });
     }
 
-    return new Promise<void>((resolve, reject) => {
-      this.emitLog('system', 'Running mysqld --initialize-insecure...');
+    assertExecutable(mysqldPath, 'MySQL');
+    this.emitLog('system', 'Running mysqld --initialize-insecure...');
 
+    await new Promise<void>((resolve, reject) => {
       execFile(
         mysqldPath,
-        [
-          `--basedir=${baseDir}`,
-          `--datadir=${dataDir}`,
-          '--initialize-insecure',
-        ],
+        [`--basedir=${baseDir}`, `--datadir=${dataDir}`, '--initialize-insecure'],
         { windowsHide: true, timeout: 30000 },
         (error, _stdout, stderr) => {
           if (error) {
-            this.emitLog('error', `MySQL initialization failed: ${error.message}`);
             reject(new Error(`MySQL data initialization failed: ${error.message}`));
-          } else {
-            if (stderr) {
-              this.emitLog('system', `MySQL init: ${stderr.substring(0, 200)}`);
-            }
-            this.emitLog('success', 'MySQL data directory initialized');
-            resolve();
+            return;
           }
+
+          if (stderr) {
+            this.emitLog('system', `MySQL init output: ${stderr.substring(0, 250)}`);
+          }
+          this.emitLog('success', 'MySQL data directory initialized');
+          resolve();
         }
       );
     });
   }
 
-  /** Check if data directory is empty (no mysql system db) */
-  private isDataDirEmpty(dataDir: string): boolean {
-    try {
-      const entries = fs.readdirSync(dataDir);
-      // A valid MySQL data dir should have a 'mysql' subdirectory
-      return !entries.includes('mysql');
-    } catch {
-      return true;
-    }
-  }
-
-  /**
-   * Resolve the mysqld.exe binary path.
-   */
   private resolveBinaryPath(): string | null {
+    const appPath =
+      (electron as unknown as { app?: { getAppPath?: () => string } }).app?.getAppPath?.() ??
+      process.cwd();
+
     const savedPath = ConfigStore.getBinaryPath('mysql');
     if (savedPath) {
       const exe = path.join(savedPath, 'bin', 'mysqld.exe');
@@ -319,12 +289,12 @@ export class MySQLService {
     }
 
     const resourcePaths = [
-      path.join(app.getAppPath(), 'resources', 'binaries', 'mysql', 'bin', 'mysqld.exe'),
+      path.join(appPath, 'resources', 'binaries', 'mysql', 'bin', 'mysqld.exe'),
       path.join(process.cwd(), 'resources', 'binaries', 'mysql', 'bin', 'mysqld.exe'),
     ];
 
-    for (const p of resourcePaths) {
-      if (fs.existsSync(p)) return p;
+    for (const binaryPath of resourcePaths) {
+      if (fs.existsSync(binaryPath)) return binaryPath;
     }
 
     const commonPaths = [
@@ -333,8 +303,8 @@ export class MySQLService {
       'C:\\devstack\\mysql\\bin\\mysqld.exe',
     ];
 
-    for (const p of commonPaths) {
-      if (fs.existsSync(p)) return p;
+    for (const binaryPath of commonPaths) {
+      if (fs.existsSync(binaryPath)) return binaryPath;
     }
 
     return null;
