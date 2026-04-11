@@ -1,0 +1,32 @@
+[
+  {
+    "name": "rollback works on apache fail",
+    "success": true,
+    "details": "restart calls: 1"
+  },
+  {
+    "name": "mutex prevents race corruption",
+    "success": true,
+    "details": "domains persisted: 25"
+  },
+  {
+    "name": "invalid path rejected",
+    "success": true,
+    "details": "missing and non-directory project paths rejected"
+  },
+  {
+    "name": "invalid hostname rejected",
+    "success": true,
+    "details": "invalid rejected: 4, allowed accepted: 3"
+  },
+  {
+    "name": "syntax fail rollback works",
+    "success": true,
+    "details": "syntax error surfaced and full rollback verified"
+  },
+  {
+    "name": "managed block safe",
+    "success": true,
+    "details": "manual entries preserved and managed block remained isolated"
+  }
+]
