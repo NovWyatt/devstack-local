@@ -43,7 +43,7 @@ interface AppStore {
 /** Default initial state for Apache */
 const initialApacheState: ServiceState = {
   status: 'stopped',
-  version: '8.5.1',
+  version: '2.4.62',
   port: 80,
 };
 

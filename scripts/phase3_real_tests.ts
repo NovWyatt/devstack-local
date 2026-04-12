@@ -201,25 +201,35 @@ async function main(): Promise<void> {
       return 'Managed block removed while manual hosts entries remained intact';
     });
 
-    await runTest('Domain create succeeds even if Apache restart fails', async () => {
+    await runTest('Domain create rolls back when Apache restart fails', async () => {
       processBridge.apacheStatus = 'running';
       processBridge.restartShouldFail = true;
+
+      const beforeDomains = JSON.stringify(storedDomains);
+      const beforeHosts = fs.readFileSync(hostsPath, 'utf-8');
+      const beforeVhost = fs.readFileSync(vhostPath, 'utf-8');
 
       const result = await domainService.createDomain({
         hostname: 'gamma.test',
         projectPath: projectB,
       });
 
-      assert(result.success, result.error ?? result.message);
+      assert(!result.success, 'Domain create should fail when Apache restart fails');
       assert(
-        result.message.includes('Apache restart failed'),
-        `Expected restart failure note in message, got: ${result.message}`
+        (result.error ?? result.message).includes('All domain changes were rolled back'),
+        `Expected rollback failure message, got: ${result.error ?? result.message}`
       );
 
       const hostsContent = fs.readFileSync(hostsPath, 'utf-8');
-      assert(hostsContent.includes('127.0.0.1 gamma.test'), 'Domain should still be persisted when restart fails');
+      const vhostContent = fs.readFileSync(vhostPath, 'utf-8');
+      const afterDomains = JSON.stringify(storedDomains);
 
-      return result.message;
+      assert(hostsContent === beforeHosts, 'Hosts file should be restored after rollback');
+      assert(vhostContent === beforeVhost, 'Vhost config should be restored after rollback');
+      assert(afterDomains === beforeDomains, 'Domain storage should be restored after rollback');
+      assert(!hostsContent.includes('127.0.0.1 gamma.test'), 'Rolled back domain must not remain in hosts');
+
+      return result.error ?? result.message;
     });
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });

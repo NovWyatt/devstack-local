@@ -4,6 +4,7 @@
  */
 
 import type { DomainInput, DomainOperationResult, DomainRecord } from './domain.types';
+import type { DatabaseListResult, DatabaseOperationResult } from './database.types';
 import type { PhpExtension, PhpOperationResult, PhpVersion } from './php.types';
 
 /** Supported service identifiers */
@@ -158,6 +159,21 @@ export interface ElectronAPI {
 
   /** Open native directory picker and return selected path */
   domainsPickProjectPath: () => Promise<string | null>;
+
+  /** List MySQL databases */
+  dbList: () => Promise<DatabaseListResult>;
+
+  /** Create a MySQL database */
+  dbCreate: (name: string) => Promise<DatabaseOperationResult>;
+
+  /** Delete a MySQL database */
+  dbDelete: (name: string) => Promise<DatabaseOperationResult>;
+
+  /** Import a .sql file into a database (opens picker when filePath omitted) */
+  dbImport: (databaseName: string, filePath?: string) => Promise<DatabaseOperationResult>;
+
+  /** Export a database to .sql (opens save dialog when filePath omitted) */
+  dbExport: (databaseName: string, filePath?: string) => Promise<DatabaseOperationResult>;
 }
 
 /**

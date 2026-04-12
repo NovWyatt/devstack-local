@@ -1,0 +1,27 @@
+[
+  {
+    "name": "Build web/electron bundles",
+    "success": true,
+    "details": "npm run build completed"
+  },
+  {
+    "name": "Build unpacked Windows package",
+    "success": true,
+    "details": "release/win-unpacked generated"
+  },
+  {
+    "name": "Verify packaged resources and binaries",
+    "success": true,
+    "details": "Validated app.asar, icon, Apache/MySQL binaries, and PHP CGI (C:\\Users\\Wyatt\\Desktop\\devstack-local\\release\\win-unpacked\\resources\\binaries\\php\\8.3.30\\php-cgi.exe)"
+  },
+  {
+    "name": "Verify packaged path resolution contract",
+    "success": true,
+    "details": "Bundled resources resolve from resources/binaries and mutable paths stay outside packaged resources"
+  },
+  {
+    "name": "Packaged app startup smoke exits cleanly",
+    "success": true,
+    "details": "Launched and exited cleanly: C:\\Users\\Wyatt\\Desktop\\devstack-local\\release\\win-unpacked\\DevStack Local.exe"
+  }
+]

@@ -47,7 +47,7 @@ export function VersionDownloader({ version, onClose }: VersionDownloaderProps) 
   const sizeMap: Record<string, string> = {
     '8.5.1': '32 MB',
     '8.5.0': '32 MB',
-    '8.3.29': '30 MB',
+    '8.3.30': '30 MB',
     '7.4.30': '28 MB',
     '5.6.9': '24 MB',
   };

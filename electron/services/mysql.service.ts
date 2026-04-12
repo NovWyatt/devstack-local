@@ -5,12 +5,12 @@
 import path from 'path';
 import fs from 'fs';
 import { execFile } from 'child_process';
-import electron from 'electron';
 import type { ServiceState } from '../../src/types';
 import { assertExecutable } from '../utils/binary.util';
 import { ConfigStore } from '../utils/config.store';
 import { getPortConflictMessage, isPortAvailable, isPortListening } from '../utils/port.util';
 import { retryCheck, retryOrThrow } from '../utils/retry.util';
+import { ensureDir, getBundledBinaryRoots, getMySQLDataDir, getMySQLTmpDir } from '../utils/runtime.paths';
 import type { ProcessManager } from './process.manager';
 
 type LogEmitter = (level: string, message: string) => void;
@@ -64,7 +64,8 @@ export class MySQLService {
     this.emitLog('system', `Binary: ${this.mysqldPath}`);
 
     const mysqlBaseDir = path.dirname(path.dirname(this.mysqldPath));
-    const dataDir = path.join(mysqlBaseDir, 'data');
+    const dataDir = getMySQLDataDir();
+    const tmpDir = ensureDir(getMySQLTmpDir());
 
     // Safety: only initialize when directory does not exist.
     if (!fs.existsSync(dataDir)) {
@@ -85,6 +86,7 @@ export class MySQLService {
     const args: string[] = [
       `--basedir=${mysqlBaseDir}`,
       `--datadir=${dataDir}`,
+      `--tmpdir=${tmpDir}`,
       `--port=${this.port}`,
       '--console',
     ];
@@ -278,22 +280,16 @@ export class MySQLService {
   }
 
   private resolveBinaryPath(): string | null {
-    const appPath =
-      (electron as unknown as { app?: { getAppPath?: () => string } }).app?.getAppPath?.() ??
-      process.cwd();
-
     const savedPath = ConfigStore.getBinaryPath('mysql');
     if (savedPath) {
       const exe = path.join(savedPath, 'bin', 'mysqld.exe');
       if (fs.existsSync(exe)) return exe;
     }
 
-    const resourcePaths = [
-      path.join(appPath, 'resources', 'binaries', 'mysql', 'bin', 'mysqld.exe'),
-      path.join(process.cwd(), 'resources', 'binaries', 'mysql', 'bin', 'mysqld.exe'),
-    ];
-
-    for (const binaryPath of resourcePaths) {
+    const bundledPaths = getBundledBinaryRoots().map((root) =>
+      path.join(root, 'mysql', 'bin', 'mysqld.exe')
+    );
+    for (const binaryPath of bundledPaths) {
       if (fs.existsSync(binaryPath)) return binaryPath;
     }
 

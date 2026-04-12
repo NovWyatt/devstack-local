@@ -20,8 +20,8 @@
     "details": "Managed block removed while manual hosts entries remained intact"
   },
   {
-    "name": "Domain create succeeds even if Apache restart fails",
+    "name": "Domain create rolls back when Apache restart fails",
     "success": true,
-    "details": "Domain gamma.test created successfully. Apache restart failed (MOCK_RESTART_FAILURE)."
+    "details": "Apache restart failed after domain update: MOCK_RESTART_FAILURE. All domain changes were rolled back."
   }
 ]

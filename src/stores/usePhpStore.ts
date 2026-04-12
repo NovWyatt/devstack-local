@@ -61,9 +61,9 @@ extension=openssl
 
 /** Mock version catalog for browser-mode development */
 const MOCK_VERSIONS: PhpVersion[] = [
-  { version: '8.5.1', path: 'C:\\devstack\\php\\8.5.1\\php.exe', installed: true, active: true, size: '32 MB' },
+  { version: '8.5.1', path: '', installed: false, active: false, size: '32 MB' },
   { version: '8.5.0', path: '', installed: false, active: false, size: '32 MB' },
-  { version: '8.3.29', path: '', installed: false, active: false, size: '30 MB' },
+  { version: '8.3.30', path: 'C:\\devstack\\php\\8.3.30\\php.exe', installed: true, active: true, size: '30 MB' },
   { version: '7.4.30', path: '', installed: false, active: false, size: '28 MB' },
   { version: '5.6.9', path: '', installed: false, active: false, size: '24 MB' },
 ];
@@ -133,7 +133,7 @@ function getPhpApi() {
 export const usePhpStore = create<PhpStore>((set, get) => ({
   // ─── Initial State ──────────────────────────────────────────────
   versions: [],
-  activeVersion: '8.5.1',
+  activeVersion: '8.3.30',
   phpIniContent: '',
   phpIniSavedContent: '',
   phpIniModified: false,
@@ -157,7 +157,7 @@ export const usePhpStore = create<PhpStore>((set, get) => ({
         const active = versions.find((v: PhpVersion) => v.active);
         set({
           versions,
-          activeVersion: active?.version ?? '8.5.1',
+          activeVersion: active?.version ?? '8.3.30',
           loadingVersions: false,
         });
       } else {

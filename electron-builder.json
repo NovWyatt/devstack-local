@@ -6,7 +6,28 @@
   },
   "files": [
     "dist/**/*",
-    "dist-electron/**/*"
+    "dist-electron/**/*",
+    "package.json"
+  ],
+  "extraResources": [
+    {
+      "from": "resources/binaries",
+      "to": "binaries",
+      "filter": [
+        "**/*",
+        "!apache/logs/**",
+        "!apache/conf/httpd.devstack.conf",
+        "!apache/conf/extra/httpd-devstack-vhosts.conf",
+        "!mysql/data/**",
+        "!php/*/php.ini",
+        "!php/*/php.ini.bak",
+        "!php/*/backups/**"
+      ]
+    },
+    {
+      "from": "public/icon.ico",
+      "to": "icon.ico"
+    }
   ],
   "win": {
     "target": ["nsis"],

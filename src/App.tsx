@@ -11,6 +11,7 @@ import { Layout } from './components/layout/Layout';
 import { Dashboard } from './components/dashboard/Dashboard';
 import { PhpManager } from './components/php-manager/PhpManager';
 import { DomainsManager } from './components/domains-manager/DomainsManager';
+import { DatabaseManager } from './components/database-manager/DatabaseManager';
 import { ComingSoon } from './components/shared/ComingSoon';
 import { useAppStore } from './stores/useAppStore';
 
@@ -56,7 +57,7 @@ function App() {
         <Route path="/" element={<Dashboard />} />
         <Route path="/php-manager" element={<PhpManager />} />
         <Route path="/domains" element={<DomainsManager />} />
-        <Route path="/database" element={<ComingSoon title="Database" />} />
+        <Route path="/database" element={<DatabaseManager />} />
         <Route path="/ssh-ftp" element={<ComingSoon title="SSH / FTP" />} />
         <Route path="/system-logs" element={<ComingSoon title="System Logs" />} />
         <Route path="/tunnel" element={<ComingSoon title="Tunnel" />} />

@@ -11,11 +11,17 @@
 
 import fs from 'fs';
 import path from 'path';
-import electron from 'electron';
 import type { PhpExtension, PhpOperationResult, PhpVersion } from '../../src/types/php.types';
 import { ConfigStore } from '../utils/config.store';
 import { findAvailablePort, isPortAvailable, isPortListening } from '../utils/port.util';
 import { retryOrThrow } from '../utils/retry.util';
+import {
+  ensureDir,
+  getBundledBinaryRoots,
+  getPhpBackupDir,
+  getPhpRuntimeDir,
+  getPhpRuntimeIniPath,
+} from '../utils/runtime.paths';
 import type { ProcessManager } from './process.manager';
 
 type LogEmitter = (level: string, message: string) => void;
@@ -70,7 +76,7 @@ extension=openssl
 const VERSION_CATALOG: Array<{ version: string; size: string }> = [
   { version: '8.5.1', size: '32 MB' },
   { version: '8.5.0', size: '32 MB' },
-  { version: '8.3.29', size: '30 MB' },
+  { version: '8.3.30', size: '30 MB' },
   { version: '7.4.30', size: '28 MB' },
   { version: '5.6.9', size: '24 MB' },
 ];
@@ -113,14 +119,17 @@ export class PhpService {
     const installedFromStore = ConfigStore.getInstalledPhpVersions();
     const allInstalled = new Set([...installedOnDisk, ...installedFromStore]);
 
-    return VERSION_CATALOG.map((item) => ({
-      version: item.version,
-      path: allInstalled.has(item.version) ? this.getVersionDir(item.version) : '',
-      installed: allInstalled.has(item.version),
-      active: item.version === this.activeVersion,
-      size: item.size,
-      downloadUrl: `https://windows.php.net/downloads/releases/php-${item.version}-Win32-vs16-x64.zip`,
-    }));
+    return VERSION_CATALOG.map((item) => {
+      const installedDir = this.findVersionDirOnDisk(item.version);
+      return {
+        version: item.version,
+        path: installedDir ? path.join(installedDir, 'php.exe') : '',
+        installed: allInstalled.has(item.version),
+        active: item.version === this.activeVersion,
+        size: item.size,
+        downloadUrl: `https://windows.php.net/downloads/releases/php-${item.version}-Win32-vs16-x64.zip`,
+      };
+    });
   }
 
   async setActiveVersion(version: string): Promise<PhpOperationResult> {
@@ -215,13 +224,15 @@ export class PhpService {
 
     const processName = `php-cgi-${version}`;
     const port = await this.resolvePhpCgiPort(version);
+    const runtimeIniPath = this.ensureRuntimePhpIni(version);
+    const runtimeIniDir = path.dirname(runtimeIniPath);
 
     this.emitLog('system', `Starting PHP-CGI ${version} on 127.0.0.1:${port}...`);
 
     this.processManager.startProcess(
       processName,
       phpCgiPath,
-      ['-b', `127.0.0.1:${port}`],
+      ['-c', runtimeIniDir, '-b', `127.0.0.1:${port}`],
       {
         cwd: path.dirname(phpCgiPath),
         windowsHide: true,
@@ -266,36 +277,30 @@ export class PhpService {
   }
 
   async getPhpIniContent(version: string): Promise<string> {
-    const iniPath = this.getPhpIniPath(version);
-    if (iniPath && fs.existsSync(iniPath)) {
-      try {
-        return fs.readFileSync(iniPath, 'utf-8');
-      } catch (error) {
-        this.emitLog('warning', `Could not read php.ini from ${iniPath}: ${String(error)}`);
-      }
+    const iniPath = this.ensureRuntimePhpIni(version);
+    try {
+      return fs.readFileSync(iniPath, 'utf-8');
+    } catch (error) {
+      this.emitLog('warning', `Could not read php.ini from ${iniPath}: ${String(error)}`);
+      return this.phpIniCache.get(version) ?? DEFAULT_PHP_INI;
     }
-
-    return this.phpIniCache.get(version) ?? DEFAULT_PHP_INI;
   }
 
   async savePhpIniContent(version: string, content: string): Promise<PhpOperationResult> {
     try {
       this.emitLog('system', `Saving php.ini for PHP ${version}...`);
-      const iniPath = this.getPhpIniPath(version);
+      const iniPath = this.ensureRuntimePhpIni(version);
+      const backupDir = ensureDir(getPhpBackupDir(version));
 
-      if (iniPath) {
-        if (fs.existsSync(iniPath)) {
-          const backupPath = `${iniPath}.bak`;
-          fs.copyFileSync(iniPath, backupPath);
-          this.emitLog('system', `Backup created: ${backupPath}`);
-        }
-
-        fs.writeFileSync(iniPath, content, 'utf-8');
-        this.emitLog('success', `php.ini saved to ${iniPath}`);
-      } else {
-        this.phpIniCache.set(version, content);
-        this.emitLog('success', `php.ini saved to memory for PHP ${version}`);
+      if (fs.existsSync(iniPath)) {
+        const backupPath = path.join(backupDir, `php.ini.${Date.now()}.bak`);
+        fs.copyFileSync(iniPath, backupPath);
+        this.emitLog('system', `Backup created: ${backupPath}`);
       }
+
+      fs.writeFileSync(iniPath, content, 'utf-8');
+      this.phpIniCache.set(version, content);
+      this.emitLog('success', `php.ini saved to ${iniPath}`);
 
       return { success: true, message: 'php.ini saved successfully' };
     } catch (error) {
@@ -358,19 +363,13 @@ export class PhpService {
       onProgress(progress);
     }
 
-    const versionDir = this.getVersionDir(version) || this.createVersionDir(version);
-    if (versionDir) {
-      const iniPath = path.join(versionDir, 'php.ini');
-      if (!fs.existsSync(iniPath)) {
-        try {
-          fs.writeFileSync(iniPath, DEFAULT_PHP_INI, 'utf-8');
-        } catch {
-          this.phpIniCache.set(version, DEFAULT_PHP_INI);
-        }
-      }
-    } else {
-      this.phpIniCache.set(version, DEFAULT_PHP_INI);
+    // Keep bundled binaries read-only. Persist installation metadata and
+    // prepare runtime php.ini in userData instead.
+    const runtimeIniPath = this.ensureRuntimePhpIni(version);
+    if (!fs.existsSync(runtimeIniPath)) {
+      fs.writeFileSync(runtimeIniPath, DEFAULT_PHP_INI, 'utf-8');
     }
+    this.phpIniCache.set(version, DEFAULT_PHP_INI);
 
     const installed = ConfigStore.getInstalledPhpVersions();
     if (!installed.includes(version)) {
@@ -428,20 +427,99 @@ export class PhpService {
   }
 
   private getPhpCgiPath(version: string): string | null {
-    const versionDir = this.getVersionDir(version);
+    const versionDir = this.findVersionDirOnDisk(version);
+    if (!versionDir) return null;
+
     const cgiPath = path.join(versionDir, 'php-cgi.exe');
     return fs.existsSync(cgiPath) ? cgiPath : null;
   }
 
-  private getPhpIniPath(version: string): string | null {
-    const versionDir = this.getVersionDir(version);
-    const candidates = [path.join(versionDir, 'php.ini'), path.join(versionDir, 'php.ini-development')];
+  private getBundledPhpIniPath(version: string): string | null {
+    const versionDir = this.findVersionDirOnDisk(version);
+    if (!versionDir) return null;
+
+    const candidates = [
+      path.join(versionDir, 'php.ini'),
+      path.join(versionDir, 'php.ini-development'),
+      path.join(versionDir, 'php.ini-production'),
+    ];
 
     for (const candidate of candidates) {
       if (fs.existsSync(candidate)) return candidate;
     }
 
-    return path.join(versionDir, 'php.ini');
+    return null;
+  }
+
+  private loadBundledPhpIniContent(version: string): string {
+    const bundledIniPath = this.getBundledPhpIniPath(version);
+    if (bundledIniPath) {
+      try {
+        return fs.readFileSync(bundledIniPath, 'utf-8');
+      } catch (error) {
+        this.emitLog('warning', `Failed reading bundled php.ini for PHP ${version}: ${String(error)}`);
+      }
+    }
+
+    return this.phpIniCache.get(version) ?? DEFAULT_PHP_INI;
+  }
+
+  private toPhpPath(value: string): string {
+    return value.replace(/\\/g, '/');
+  }
+
+  private replaceOrAppendIniDirective(content: string, pattern: RegExp, directive: string): string {
+    if (pattern.test(content)) {
+      return content.replace(pattern, directive);
+    }
+    return `${content.trimEnd()}\n${directive}\n`;
+  }
+
+  private applyRuntimeIniOverrides(version: string, content: string): string {
+    const runtimeDir = getPhpRuntimeDir(version);
+    const logsDir = ensureDir(path.join(runtimeDir, 'logs'));
+    const tmpDir = ensureDir(path.join(runtimeDir, 'tmp'));
+    const sessionsDir = ensureDir(path.join(runtimeDir, 'sessions'));
+
+    let patched = content;
+    patched = this.replaceOrAppendIniDirective(
+      patched,
+      /^\s*error_log\s*=.+$/mi,
+      `error_log = "${this.toPhpPath(path.join(logsDir, 'php_error.log'))}"`
+    );
+    patched = this.replaceOrAppendIniDirective(
+      patched,
+      /^\s*sys_temp_dir\s*=.+$/mi,
+      `sys_temp_dir = "${this.toPhpPath(tmpDir)}"`
+    );
+    patched = this.replaceOrAppendIniDirective(
+      patched,
+      /^\s*upload_tmp_dir\s*=.+$/mi,
+      `upload_tmp_dir = "${this.toPhpPath(tmpDir)}"`
+    );
+    patched = this.replaceOrAppendIniDirective(
+      patched,
+      /^\s*session\.save_path\s*=.+$/mi,
+      `session.save_path = "${this.toPhpPath(sessionsDir)}"`
+    );
+
+    return patched;
+  }
+
+  private ensureRuntimePhpIni(version: string): string {
+    const runtimeIniPath = getPhpRuntimeIniPath(version);
+    ensureDir(path.dirname(runtimeIniPath));
+
+    if (!fs.existsSync(runtimeIniPath)) {
+      const initialContent = this.applyRuntimeIniOverrides(
+        version,
+        this.loadBundledPhpIniContent(version)
+      );
+      fs.writeFileSync(runtimeIniPath, initialContent, 'utf-8');
+      this.phpIniCache.set(version, initialContent);
+    }
+
+    return runtimeIniPath;
   }
 
   private scanInstalledVersions(): string[] {
@@ -476,24 +554,15 @@ export class PhpService {
     return installedOnDisk.includes(version) || installedFromStore.includes(version);
   }
 
-  private getVersionDir(version: string): string {
+  private findVersionDirOnDisk(version: string): string | null {
     for (const baseDir of this.getPhpBaseDirs()) {
       const versionDir = path.join(baseDir, version);
-      if (fs.existsSync(versionDir)) return versionDir;
+      if (fs.existsSync(versionDir) && fs.statSync(versionDir).isDirectory()) {
+        return versionDir;
+      }
     }
 
-    return path.join(this.getPhpBaseDirs()[0], version);
-  }
-
-  private createVersionDir(version: string): string | null {
-    try {
-      const baseDir = this.getPhpBaseDirs()[0];
-      const versionDir = path.join(baseDir, version);
-      fs.mkdirSync(versionDir, { recursive: true });
-      return versionDir;
-    } catch {
-      return null;
-    }
+    return null;
   }
 
   private getPhpBaseDirs(): string[] {
@@ -503,16 +572,11 @@ export class PhpService {
       dirs.push(savedPath);
     }
 
-    const appPath =
-      (electron as unknown as { app?: { getAppPath?: () => string } }).app?.getAppPath?.() ??
-      process.cwd();
+    for (const root of getBundledBinaryRoots()) {
+      dirs.push(path.join(root, 'php'));
+    }
 
-    dirs.push(
-      path.join(appPath, 'resources', 'binaries', 'php'),
-      path.join(process.cwd(), 'resources', 'binaries', 'php')
-    );
-
-    return dirs;
+    return Array.from(new Set(dirs.map((dir) => path.normalize(dir))));
   }
 
   private emitLog(level: string, message: string): void {

@@ -125,6 +125,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Open native folder picker for project path */
   domainsPickProjectPath: () => ipcRenderer.invoke('domains:pick-project-path'),
 
+  /** List MySQL databases */
+  dbList: () => ipcRenderer.invoke('db:list'),
+
+  /** Create a MySQL database */
+  dbCreate: (name: string) => ipcRenderer.invoke('db:create', name),
+
+  /** Delete a MySQL database */
+  dbDelete: (name: string) => ipcRenderer.invoke('db:delete', name),
+
+  /** Import SQL into a database (opens picker if file path is omitted) */
+  dbImport: (databaseName: string, filePath?: string) =>
+    ipcRenderer.invoke('db:import', databaseName, filePath),
+
+  /** Export database to SQL (opens save dialog if file path is omitted) */
+  dbExport: (databaseName: string, filePath?: string) =>
+    ipcRenderer.invoke('db:export', databaseName, filePath),
+
   /** Listen for download progress updates */
   onPhpDownloadProgress: (callback: (version: string, progress: number) => void) => {
     ipcRenderer.on('php:download-progress', (_event, version, progress) =>

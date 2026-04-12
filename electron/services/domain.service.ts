@@ -5,16 +5,22 @@
 import { execFile } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import electron from 'electron';
 import type { ServiceResult, ServiceState } from '../../src/types';
 import type { DomainInput, DomainOperationResult, DomainRecord } from '../../src/types/domain.types';
 import type { PhpVersion } from '../../src/types/php.types';
 import { ConfigStore } from '../utils/config.store';
 import { assertExecutable } from '../utils/binary.util';
+import {
+  ensureDir,
+  getApacheLogDir,
+  getApacheRuntimeConfigPath,
+  getApacheVhostConfigPath,
+  getBundledBinaryRoots,
+  toApachePath,
+} from '../utils/runtime.paths';
 
 const HOSTS_BLOCK_START = '# DEVSTACK LOCAL DOMAINS START';
 const HOSTS_BLOCK_END = '# DEVSTACK LOCAL DOMAINS END';
-const DEVSTACK_VHOST_FILENAME = 'httpd-devstack-vhosts.conf';
 
 interface DomainProcessBridge {
   broadcastLog(level: string, message: string): void;
@@ -472,9 +478,8 @@ export class DomainService {
 
   private writeApacheVhostConfig(domains: DomainRecord[]): void {
     const configDir = path.dirname(this.apacheVhostConfigPath);
-    if (!fs.existsSync(configDir)) {
-      fs.mkdirSync(configDir, { recursive: true });
-    }
+    ensureDir(configDir);
+    ensureDir(getApacheLogDir());
 
     const content = this.renderApacheVhostConfig(domains);
     fs.writeFileSync(this.apacheVhostConfigPath, content, 'utf-8');
@@ -498,7 +503,8 @@ export class DomainService {
   }
 
   private renderVhostBlock(domain: DomainRecord): string {
-    const projectPath = this.toApachePath(domain.projectPath);
+    const projectPath = toApachePath(domain.projectPath);
+    const apacheLogDir = toApachePath(getApacheLogDir());
     const logName = domain.hostname.replace(/[^a-z0-9.-]/gi, '_');
 
     const lines = [
@@ -510,8 +516,8 @@ export class DomainService {
       `        AllowOverride All`,
       `        Require all granted`,
       `    </Directory>`,
-      `    ErrorLog "logs/devstack-${logName}-error.log"`,
-      `    CustomLog "logs/devstack-${logName}-access.log" common`,
+      `    ErrorLog "${apacheLogDir}/devstack-${logName}-error.log"`,
+      `    CustomLog "${apacheLogDir}/devstack-${logName}-access.log" common`,
     ];
 
     if (domain.phpVersion && domain.phpPort) {
@@ -596,30 +602,23 @@ export class DomainService {
   }
 
   private resolveApacheBinaryPath(): string | null {
-    let appPath = process.cwd();
-    try {
-      appPath =
-        (electron as unknown as { app?: { getAppPath?: () => string } }).app?.getAppPath?.() ??
-        process.cwd();
-    } catch {
-      appPath = process.cwd();
-    }
-
     const savedPath = ConfigStore.getBinaryPath('apache');
     if (savedPath) {
       const exe = path.join(savedPath, 'bin', 'httpd.exe');
       if (fs.existsSync(exe)) return exe;
     }
 
-    const resourcePaths = [
-      path.join(appPath, 'resources', 'binaries', 'apache', 'bin', 'httpd.exe'),
-      path.join(process.cwd(), 'resources', 'binaries', 'apache', 'bin', 'httpd.exe'),
+    const bundledPaths = getBundledBinaryRoots().map((root) =>
+      path.join(root, 'apache', 'bin', 'httpd.exe')
+    );
+    const candidatePaths = [
+      ...bundledPaths,
       'C:\\Apache24\\bin\\httpd.exe',
       'C:\\Apache\\bin\\httpd.exe',
       'C:\\devstack\\apache\\bin\\httpd.exe',
     ];
 
-    for (const binaryPath of resourcePaths) {
+    for (const binaryPath of candidatePaths) {
       if (fs.existsSync(binaryPath)) return binaryPath;
     }
 
@@ -627,9 +626,14 @@ export class DomainService {
   }
 
   private resolveActiveApacheConfigPath(apacheDir: string): string {
-    const runtimePath = path.join(apacheDir, 'conf', 'httpd.devstack.conf');
+    const runtimePath = getApacheRuntimeConfigPath();
     if (fs.existsSync(runtimePath)) {
       return runtimePath;
+    }
+
+    const bundledRuntimePath = path.join(apacheDir, 'conf', 'httpd.devstack.conf');
+    if (fs.existsSync(bundledRuntimePath)) {
+      return bundledRuntimePath;
     }
 
     const defaultPath = path.join(apacheDir, 'conf', 'httpd.conf');
@@ -708,10 +712,6 @@ export class DomainService {
     return [...domains].sort((a, b) => a.hostname.localeCompare(b.hostname));
   }
 
-  private toApachePath(value: string): string {
-    return value.replace(/\\/g, '/');
-  }
-
   private isIPv4Address(value: string): boolean {
     const segments = value.split('.');
     if (segments.length !== 4) {
@@ -742,36 +742,7 @@ export class DomainService {
       return path.resolve(providedPath);
     }
 
-    let appPath = process.cwd();
-    try {
-      appPath =
-        (electron as unknown as { app?: { getAppPath?: () => string } }).app?.getAppPath?.() ??
-        process.cwd();
-    } catch {
-      appPath = process.cwd();
-    }
-
-    const candidates: string[] = [];
-    const savedApachePath = ConfigStore.getBinaryPath('apache');
-    if (savedApachePath) {
-      candidates.push(path.join(savedApachePath, 'conf', 'extra', DEVSTACK_VHOST_FILENAME));
-    }
-
-    candidates.push(
-      path.join(appPath, 'resources', 'binaries', 'apache', 'conf', 'extra', DEVSTACK_VHOST_FILENAME),
-      path.join(process.cwd(), 'resources', 'binaries', 'apache', 'conf', 'extra', DEVSTACK_VHOST_FILENAME),
-      path.join('C:\\Apache24', 'conf', 'extra', DEVSTACK_VHOST_FILENAME),
-      path.join('C:\\Apache', 'conf', 'extra', DEVSTACK_VHOST_FILENAME),
-      path.join('C:\\devstack\\apache', 'conf', 'extra', DEVSTACK_VHOST_FILENAME)
-    );
-
-    for (const candidate of candidates) {
-      if (fs.existsSync(path.dirname(candidate))) {
-        return candidate;
-      }
-    }
-
-    return candidates[0];
+    return getApacheVhostConfigPath();
   }
 
   private generateDomainId(): string {

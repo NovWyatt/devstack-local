@@ -35,7 +35,7 @@ export interface DevStackConfig {
 
 /** Default configuration values */
 const defaults: DevStackConfig = {
-  activePhpVersion: '8.3.29',
+  activePhpVersion: '8.3.30',
   installedPhpVersions: [],
   ports: {
     apache: 80,

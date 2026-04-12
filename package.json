@@ -9,9 +9,11 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "verify": "npm run build && npx tsx scripts/phase2_6_real_tests.ts && npx tsx scripts/phase3_real_tests.ts && npx tsx scripts/phase3_1_hardening_tests.ts && npx tsx scripts/phase4_1_real_tests.ts",
     "preview": "vite preview",
     "electron:dev": "vite --mode electron",
-    "electron:build": "npm run build && electron-builder"
+    "electron:build": "npm run build && electron-builder",
+    "smoke:packaged": "npx tsx scripts/phase3_3_packaged_smoke.ts"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",

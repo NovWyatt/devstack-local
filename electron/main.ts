@@ -14,6 +14,8 @@ import path from 'path';
 import { ProcessManager } from './services/process.manager';
 import { PhpService } from './services/php.service';
 import { DomainService } from './services/domain.service';
+import { DatabaseService } from './services/database.service';
+import { resolveAppIconPath } from './utils/runtime.paths';
 import type { DomainInput } from '../src/types/domain.types';
 
 /** Singleton reference to the main application window */
@@ -29,6 +31,9 @@ phpService.setProcessManager(processManager);
 /** Domain and virtual host manager */
 const domainService = new DomainService(processManager, phpService);
 
+/** Database manager */
+const databaseService = new DatabaseService(processManager);
+
 /** Track whether we're already quitting to prevent double-stop */
 let isQuitting = false;
 
@@ -42,7 +47,7 @@ function createWindow(): void {
     minWidth: 1280,
     minHeight: 800,
     backgroundColor: '#0a0e1a',
-    icon: path.join(__dirname, '../public/icon.ico'),
+    icon: resolveAppIconPath(),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -77,6 +82,28 @@ function createWindow(): void {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+}
+
+function setupPackagedSmokeExitTimer(): void {
+  const raw = process.env.DEVSTACK_SMOKE_EXIT_MS;
+  if (!raw) return;
+
+  const timeoutMs = Number(raw);
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    console.warn(`[smoke] Ignoring invalid DEVSTACK_SMOKE_EXIT_MS value: ${raw}`);
+    return;
+  }
+
+  setTimeout(async () => {
+    if (isQuitting) return;
+    isQuitting = true;
+    try {
+      await processManager.stopAllServices();
+    } catch (err) {
+      console.error('[smoke] Failed to stop services before exit:', err);
+    }
+    app.quit();
+  }, timeoutMs);
 }
 
 /**
@@ -215,6 +242,83 @@ function registerIpcHandlers(): void {
 
   // ─── Application ───────────────────────────────────────────────────
 
+  // Database Manager
+  ipcMain.handle('db:list', async () => {
+    return databaseService.listDatabases();
+  });
+
+  ipcMain.handle('db:create', async (_event, name: string) => {
+    return databaseService.createDatabase(name);
+  });
+
+  ipcMain.handle('db:delete', async (_event, name: string) => {
+    return databaseService.deleteDatabase(name);
+  });
+
+  ipcMain.handle('db:import', async (event, databaseName: string, filePath?: string) => {
+    try {
+      let sourcePath = filePath?.trim() || '';
+      if (!sourcePath) {
+        const ownerWindow = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+        const dialogOptions = {
+          title: 'Import SQL File',
+          properties: ['openFile'] as const,
+          filters: [{ name: 'SQL Files', extensions: ['sql'] }],
+        };
+        const selected = ownerWindow
+          ? await dialog.showOpenDialog(ownerWindow, dialogOptions)
+          : await dialog.showOpenDialog(dialogOptions);
+
+        if (selected.canceled || selected.filePaths.length === 0) {
+          return { success: false, message: 'Import cancelled', error: 'CANCELLED' };
+        }
+
+        sourcePath = selected.filePaths[0];
+      }
+
+      return databaseService.importSqlFile(databaseName, sourcePath);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { success: false, message: 'Failed to import SQL file', error: message };
+    }
+  });
+
+  ipcMain.handle('db:export', async (event, databaseName: string, filePath?: string) => {
+    try {
+      let targetPath = filePath?.trim() || '';
+      if (!targetPath) {
+        const safeDatabaseName = databaseName.trim().replace(/[^a-zA-Z0-9_-]/g, '_') || 'database';
+        const timestamp = new Date()
+          .toISOString()
+          .replace(/[-:]/g, '')
+          .replace('T', '-')
+          .slice(0, 15);
+
+        const ownerWindow = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+        const dialogOptions = {
+          title: 'Export Database SQL',
+          defaultPath: `${safeDatabaseName}-${timestamp}.sql`,
+          filters: [{ name: 'SQL Files', extensions: ['sql'] }],
+        };
+        const selected = ownerWindow
+          ? await dialog.showSaveDialog(ownerWindow, dialogOptions)
+          : await dialog.showSaveDialog(dialogOptions);
+
+        if (selected.canceled || !selected.filePath) {
+          return { success: false, message: 'Export cancelled', error: 'CANCELLED' };
+        }
+
+        targetPath = selected.filePath;
+      }
+
+      return databaseService.exportDatabase(databaseName, targetPath);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { success: false, message: 'Failed to export database', error: message };
+    }
+  });
+
+  // Application
   ipcMain.handle('app:exit', async () => {
     if (!mainWindow) return;
 
@@ -241,6 +345,7 @@ function registerIpcHandlers(): void {
 app.whenReady().then(() => {
   registerIpcHandlers();
   createWindow();
+  setupPackagedSmokeExitTimer();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
