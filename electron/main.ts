@@ -318,6 +318,18 @@ function registerIpcHandlers(): void {
     }
   });
 
+  ipcMain.handle('db:tables', async (_event, databaseName: string) => {
+    return databaseService.listTables(databaseName);
+  });
+
+  ipcMain.handle('db:schema', async (_event, databaseName: string, tableName: string) => {
+    return databaseService.getTableSchema(databaseName, tableName);
+  });
+
+  ipcMain.handle('db:rows', async (_event, databaseName: string, tableName: string, page: number, limit: number) => {
+    return databaseService.getTableRows(databaseName, tableName, page, limit);
+  });
+
   // Application
   ipcMain.handle('app:exit', async () => {
     if (!mainWindow) return;

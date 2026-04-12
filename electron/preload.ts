@@ -142,6 +142,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   dbExport: (databaseName: string, filePath?: string) =>
     ipcRenderer.invoke('db:export', databaseName, filePath),
 
+  /** List tables for a selected database */
+  dbTables: (databaseName: string) => ipcRenderer.invoke('db:tables', databaseName),
+
+  /** Load schema metadata for a selected table */
+  dbSchema: (databaseName: string, tableName: string) =>
+    ipcRenderer.invoke('db:schema', databaseName, tableName),
+
+  /** Load paged table rows for a selected table */
+  dbRows: (databaseName: string, tableName: string, page: number, limit: number) =>
+    ipcRenderer.invoke('db:rows', databaseName, tableName, page, limit),
+
   /** Listen for download progress updates */
   onPhpDownloadProgress: (callback: (version: string, progress: number) => void) => {
     ipcRenderer.on('php:download-progress', (_event, version, progress) =>

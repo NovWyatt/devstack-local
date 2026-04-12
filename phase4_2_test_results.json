@@ -1,0 +1,17 @@
+[
+  {
+    "name": "List tables",
+    "success": true,
+    "details": "1 tables loaded from phase4_2_db_1775979837388"
+  },
+  {
+    "name": "Load table schema",
+    "success": true,
+    "details": "Schema columns: id, label"
+  },
+  {
+    "name": "Load paged table rows",
+    "success": true,
+    "details": "Pagination verified across pages (2 + 2 + 1 rows)"
+  }
+]

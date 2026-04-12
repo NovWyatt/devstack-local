@@ -13,7 +13,14 @@ import fs from 'fs';
 import path from 'path';
 import { execFile, spawn } from 'child_process';
 import type { ServiceState } from '../../src/types';
-import type { DatabaseListResult, DatabaseOperationResult } from '../../src/types/database.types';
+import type {
+  DatabaseListResult,
+  DatabaseOperationResult,
+  DatabaseTableListResult,
+  DatabaseTableRow,
+  DatabaseTableRowsResult,
+  DatabaseTableSchemaResult,
+} from '../../src/types/database.types';
 import { assertExecutable } from '../utils/binary.util';
 import { ConfigStore } from '../utils/config.store';
 import { ensureDir, getBundledBinaryRoots, getRuntimeRoot } from '../utils/runtime.paths';
@@ -31,7 +38,9 @@ interface CommandResult {
 const MYSQL_EXEC_TIMEOUT_MS = 30000;
 const MYSQL_IMPORT_TIMEOUT_MS = 180000;
 const MYSQL_DUMP_TIMEOUT_MS = 180000;
-const DATABASE_NAME_PATTERN = /^[A-Za-z0-9_]+$/;
+const MYSQL_IDENTIFIER_PATTERN = /^[A-Za-z0-9_]+$/;
+const TABLE_BROWSE_MAX_LIMIT = 200;
+const TABLE_BROWSE_DEFAULT_LIMIT = 50;
 const SYSTEM_DATABASES = new Set(['information_schema', 'mysql', 'performance_schema', 'sys']);
 
 export class DatabaseService {
@@ -77,6 +86,207 @@ export class DatabaseService {
         message: 'Failed to load databases',
         error: message,
         databases: [],
+      };
+    }
+  }
+
+  async listTables(databaseRaw: string): Promise<DatabaseTableListResult> {
+    const fallbackDatabase = databaseRaw.trim();
+
+    try {
+      this.ensureMysqlRunning();
+      const databaseName = this.validateDatabaseName(databaseRaw, { allowSystem: true });
+
+      const mysqlPath = this.resolveMysqlToolPath('mysql.exe');
+      if (!mysqlPath) {
+        throw new Error('MySQL client (mysql.exe) not found');
+      }
+      assertExecutable(mysqlPath, 'MySQL client');
+
+      const { stdout } = await this.execFileCommand(
+        mysqlPath,
+        [
+          ...this.buildMysqlConnectionArgs(),
+          '--batch',
+          '--skip-column-names',
+          '--execute',
+          `SHOW TABLES FROM \`${databaseName}\`;`,
+        ],
+        MYSQL_EXEC_TIMEOUT_MS
+      );
+
+      const tables = this.parseMysqlBatchLines(stdout)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+        .sort((a, b) => a.localeCompare(b));
+
+      this.log('system', `Listed ${tables.length} tables in ${databaseName}`);
+      return {
+        success: true,
+        message: 'Tables loaded',
+        database: databaseName,
+        tables,
+      };
+    } catch (error) {
+      const message = this.getErrorMessage(error);
+      this.log('error', `Failed to list tables: ${message}`);
+      return {
+        success: false,
+        message: 'Failed to load tables',
+        error: message,
+        database: fallbackDatabase,
+        tables: [],
+      };
+    }
+  }
+
+  async getTableSchema(databaseRaw: string, tableRaw: string): Promise<DatabaseTableSchemaResult> {
+    const fallbackDatabase = databaseRaw.trim();
+    const fallbackTable = tableRaw.trim();
+
+    try {
+      this.ensureMysqlRunning();
+      const databaseName = this.validateDatabaseName(databaseRaw, { allowSystem: true });
+      const tableName = this.validateTableName(tableRaw);
+
+      const mysqlPath = this.resolveMysqlToolPath('mysql.exe');
+      if (!mysqlPath) {
+        throw new Error('MySQL client (mysql.exe) not found');
+      }
+      assertExecutable(mysqlPath, 'MySQL client');
+
+      const { stdout } = await this.execFileCommand(
+        mysqlPath,
+        [
+          ...this.buildMysqlConnectionArgs(),
+          '--batch',
+          '--skip-column-names',
+          '--execute',
+          `DESCRIBE \`${databaseName}\`.\`${tableName}\`;`,
+        ],
+        MYSQL_EXEC_TIMEOUT_MS
+      );
+
+      const columns = this.parseMysqlBatchLines(stdout)
+        .map((line) => line.split('\t'))
+        .filter((parts) => parts.length > 0 && parts[0].trim().length > 0)
+        .map((parts) => {
+          const field = parts[0] ?? '';
+          const type = parts[1] ?? '';
+          const nullValue = parts[2] ?? '';
+          const key = parts[3] ?? '';
+          const defaultValueRaw = parts[4] ?? '';
+          const extra = parts[5] ?? '';
+
+          return {
+            field,
+            type,
+            nullable: nullValue.toUpperCase() === 'YES',
+            key,
+            defaultValue:
+              defaultValueRaw === '\\N' || defaultValueRaw.toUpperCase() === 'NULL'
+                ? null
+                : defaultValueRaw,
+            extra,
+          };
+        });
+
+      this.log('system', `Loaded schema for ${databaseName}.${tableName}`);
+      return {
+        success: true,
+        message: 'Schema loaded',
+        database: databaseName,
+        table: tableName,
+        columns,
+      };
+    } catch (error) {
+      const message = this.getErrorMessage(error);
+      this.log('error', `Failed to load schema: ${message}`);
+      return {
+        success: false,
+        message: 'Failed to load table schema',
+        error: message,
+        database: fallbackDatabase,
+        table: fallbackTable,
+        columns: [],
+      };
+    }
+  }
+
+  async getTableRows(
+    databaseRaw: string,
+    tableRaw: string,
+    pageRaw: number,
+    limitRaw: number
+  ): Promise<DatabaseTableRowsResult> {
+    const fallbackDatabase = databaseRaw.trim();
+    const fallbackTable = tableRaw.trim();
+    const fallbackPage = Number.isFinite(pageRaw) ? Math.max(1, Math.floor(pageRaw)) : 1;
+    const fallbackLimit = Number.isFinite(limitRaw)
+      ? Math.max(1, Math.floor(limitRaw))
+      : TABLE_BROWSE_DEFAULT_LIMIT;
+
+    try {
+      this.ensureMysqlRunning();
+      const databaseName = this.validateDatabaseName(databaseRaw, { allowSystem: true });
+      const tableName = this.validateTableName(tableRaw);
+      const page = this.normalizePage(pageRaw);
+      const limit = this.normalizeLimit(limitRaw);
+      const offset = (page - 1) * limit;
+      const limitWithLookAhead = limit + 1;
+
+      const mysqlPath = this.resolveMysqlToolPath('mysql.exe');
+      if (!mysqlPath) {
+        throw new Error('MySQL client (mysql.exe) not found');
+      }
+      assertExecutable(mysqlPath, 'MySQL client');
+
+      const { stdout } = await this.execFileCommand(
+        mysqlPath,
+        [
+          ...this.buildMysqlConnectionArgs(),
+          '--batch',
+          '--execute',
+          `SELECT * FROM \`${databaseName}\`.\`${tableName}\` LIMIT ${limitWithLookAhead} OFFSET ${offset};`,
+        ],
+        MYSQL_EXEC_TIMEOUT_MS
+      );
+
+      const lines = this.parseMysqlBatchLines(stdout);
+      const columns = lines.length > 0 ? lines[0].split('\t') : [];
+      const parsedRows = lines.slice(1).map((line) => this.parseTableRow(line, columns));
+      const hasMore = parsedRows.length > limit;
+      const rows = hasMore ? parsedRows.slice(0, limit) : parsedRows;
+
+      this.log(
+        'system',
+        `Loaded ${rows.length} rows from ${databaseName}.${tableName} (page=${page}, limit=${limit})`
+      );
+      return {
+        success: true,
+        message: 'Rows loaded',
+        database: databaseName,
+        table: tableName,
+        page,
+        limit,
+        hasMore,
+        columns,
+        rows,
+      };
+    } catch (error) {
+      const message = this.getErrorMessage(error);
+      this.log('error', `Failed to load rows: ${message}`);
+      return {
+        success: false,
+        message: 'Failed to load table rows',
+        error: message,
+        database: fallbackDatabase,
+        table: fallbackTable,
+        page: fallbackPage,
+        limit: fallbackLimit,
+        hasMore: false,
+        columns: [],
+        rows: [],
       };
     }
   }
@@ -275,7 +485,7 @@ export class DatabaseService {
     if (!normalized) {
       throw new Error('Database name is required');
     }
-    if (!DATABASE_NAME_PATTERN.test(normalized)) {
+    if (!MYSQL_IDENTIFIER_PATTERN.test(normalized)) {
       throw new Error('Database name may only contain letters, numbers, and underscores');
     }
 
@@ -285,6 +495,69 @@ export class DatabaseService {
     }
 
     return normalized;
+  }
+
+  private validateTableName(value: string): string {
+    const normalized = value.trim();
+    if (!normalized) {
+      throw new Error('Table name is required');
+    }
+    if (!MYSQL_IDENTIFIER_PATTERN.test(normalized)) {
+      throw new Error('Table name may only contain letters, numbers, and underscores');
+    }
+    return normalized;
+  }
+
+  private normalizePage(value: number): number {
+    if (!Number.isFinite(value)) {
+      throw new Error('Page must be a valid number');
+    }
+
+    const page = Math.floor(value);
+    if (page < 1) {
+      throw new Error('Page must be at least 1');
+    }
+
+    return page;
+  }
+
+  private normalizeLimit(value: number): number {
+    if (!Number.isFinite(value)) {
+      return TABLE_BROWSE_DEFAULT_LIMIT;
+    }
+
+    const limit = Math.floor(value);
+    if (limit < 1) {
+      throw new Error('Limit must be at least 1');
+    }
+
+    return Math.min(limit, TABLE_BROWSE_MAX_LIMIT);
+  }
+
+  private parseMysqlBatchLines(stdout: string): string[] {
+    const normalized = stdout.replace(/\r\n/g, '\n');
+    if (!normalized) {
+      return [];
+    }
+
+    const withoutFinalNewline = normalized.endsWith('\n')
+      ? normalized.slice(0, -1)
+      : normalized;
+
+    return withoutFinalNewline.length === 0 ? [''] : withoutFinalNewline.split('\n');
+  }
+
+  private parseTableRow(line: string, columns: string[]): DatabaseTableRow {
+    const values = line.split('\t');
+    const row: DatabaseTableRow = {};
+
+    for (let index = 0; index < columns.length; index += 1) {
+      const column = columns[index];
+      const rawValue = values[index] ?? '';
+      row[column] = rawValue === '\\N' ? null : rawValue;
+    }
+
+    return row;
   }
 
   private validateSqlFilePath(sqlFilePath: string): string {

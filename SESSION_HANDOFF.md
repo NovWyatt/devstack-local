@@ -4,11 +4,18 @@ Date: 2026-04-12
 
 ## Current Project Status
 
-- Phase 4.1 Database Manager Foundation is complete.
-- Main-process database service exists for list/create/delete/import/export.
-- DB IPC bridge is in place (`db:list`, `db:create`, `db:delete`, `db:import`, `db:export`).
-- `/database` route now has a working minimal UI (list/create/delete/import/export actions).
-- Existing service architecture and packaged runtime behavior remain preserved.
+- Phase 4.2 Database Table Browser / Data Viewer is complete.
+- Main-process database service now supports safe inspection methods:
+  - table list
+  - table schema
+  - paged table rows
+- DB browser IPC bridge is in place (`db:tables`, `db:schema`, `db:rows`).
+- Preload bridge and shared TypeScript contracts now include typed DB browser methods/results.
+- `/database` route UI now supports:
+  - database list + table list navigation
+  - schema viewer
+  - row data viewer with pagination and page-size control
+- Existing stable runtime lifecycle and packaging contract were preserved.
 
 ## Latest Stable State (Verification)
 
@@ -18,6 +25,7 @@ Date: 2026-04-12
   - `scripts/phase3_real_tests.ts`: PASS (5/5)
   - `scripts/phase3_1_hardening_tests.ts`: PASS (6/6)
   - `scripts/phase4_1_real_tests.ts`: PASS (4/4)
+  - `scripts/phase4_2_real_tests.ts`: PASS (3/3)
 - `npm run smoke:packaged`: PASS
   - unpacked package build: PASS
   - packaged resource checks: PASS
@@ -25,18 +33,18 @@ Date: 2026-04-12
 
 ## Recommended Next Exact Task
 
-Continue Phase 4 with focused incremental hardening, without broad refactors:
+Continue Phase 4 incrementally with the same low-risk approach:
 
-1. Phase 4.2: Database safety/UX hardening (row-level metadata, non-destructive system DB handling, optional SQL preview/logging).
-2. Keep `npm run verify` + `npm run smoke:packaged` as release gates for every milestone.
-3. Maintain runtime contract: MySQL lifecycle in existing `ProcessManager`/`MySQLService`; DB operations only through main-process service.
+1. Keep DB browsing read-only and preserve current runtime contracts.
+2. If Phase 4.3 is approved later, implement query console separately with strict guardrails and without broad refactors.
+3. Keep `npm run verify` + `npm run smoke:packaged` as required release gates each milestone.
 
 ## Warnings and Important Constraints
 
-- Do not reintroduce mock service control in Electron main process.
-- Keep strict TypeScript (`npm run verify`) as required gate.
-- Keep packaged smoke gate (`npm run smoke:packaged`) for release-readiness validation.
-- DB operations require MySQL service running; UI currently returns graceful errors if MySQL is stopped.
-- `.gitignore` covers runtime-generated paths, but already tracked files in those paths can still appear modified until explicitly untracked.
-- Domain writes to system hosts file still require Administrator privileges on Windows.
-- Full signed installer flows may still require environment-specific signing/privilege setup; current smoke validation uses unpacked packaging.
+- Do not reintroduce mock service lifecycle control in Electron main process.
+- Keep strict TypeScript and verification gates as mandatory merge criteria.
+- DB browse operations require MySQL running; service returns explicit error if stopped.
+- Identifier validation is strict for DB/table names to prevent unsafe SQL interpolation.
+- Row browsing is intentionally bounded (max 200 rows/request) to avoid UI blocking.
+- Domain writes to system hosts still require Administrator privileges on Windows.
+- Runtime-generated/packaging artifacts may still modify tracked files under current repo layout.

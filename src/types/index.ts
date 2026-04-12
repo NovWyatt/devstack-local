@@ -4,7 +4,13 @@
  */
 
 import type { DomainInput, DomainOperationResult, DomainRecord } from './domain.types';
-import type { DatabaseListResult, DatabaseOperationResult } from './database.types';
+import type {
+  DatabaseListResult,
+  DatabaseOperationResult,
+  DatabaseTableListResult,
+  DatabaseTableRowsResult,
+  DatabaseTableSchemaResult,
+} from './database.types';
 import type { PhpExtension, PhpOperationResult, PhpVersion } from './php.types';
 
 /** Supported service identifiers */
@@ -174,6 +180,20 @@ export interface ElectronAPI {
 
   /** Export a database to .sql (opens save dialog when filePath omitted) */
   dbExport: (databaseName: string, filePath?: string) => Promise<DatabaseOperationResult>;
+
+  /** List tables for a selected database */
+  dbTables: (databaseName: string) => Promise<DatabaseTableListResult>;
+
+  /** Load schema metadata for a selected table */
+  dbSchema: (databaseName: string, tableName: string) => Promise<DatabaseTableSchemaResult>;
+
+  /** Load paged table rows */
+  dbRows: (
+    databaseName: string,
+    tableName: string,
+    page: number,
+    limit: number
+  ) => Promise<DatabaseTableRowsResult>;
 }
 
 /**
