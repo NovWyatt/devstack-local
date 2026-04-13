@@ -1,0 +1,22 @@
+[
+  {
+    "name": "Export table to CSV with sanitized filename",
+    "success": true,
+    "details": "C:\\Users\\Wyatt\\AppData\\Local\\Temp\\devstack-phase4-4-VWJhEh\\phase4_4_table_export.csv"
+  },
+  {
+    "name": "Write queries report affected row counts",
+    "success": true,
+    "details": "UPDATE affected 1, DELETE affected 1"
+  },
+  {
+    "name": "Overlapping row fetch cancels stale request",
+    "success": true,
+    "details": "First request cancelled; second request loaded 0 rows"
+  },
+  {
+    "name": "Long-running SQL is timeout bounded",
+    "success": true,
+    "details": "ERROR 3024 (HY000) at line 1: Query execution was interrupted, maximum statement execution time exceeded"
+  }
+]

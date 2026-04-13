@@ -182,6 +182,13 @@ export interface ElectronAPI {
   /** Export a database to .sql (opens save dialog when filePath omitted) */
   dbExport: (databaseName: string, filePath?: string) => Promise<DatabaseOperationResult>;
 
+  /** Export a selected table to .csv (opens save dialog when filePath omitted) */
+  dbExportTableCsv: (
+    databaseName: string,
+    tableName: string,
+    filePath?: string
+  ) => Promise<DatabaseOperationResult>;
+
   /** List tables for a selected database */
   dbTables: (databaseName: string) => Promise<DatabaseTableListResult>;
 

@@ -17,6 +17,7 @@ import type {
 } from '../types/database.types';
 
 const DEFAULT_ROWS_LIMIT = 50;
+const ROW_FETCH_CANCELLED_ERROR = 'ROW_FETCH_CANCELLED';
 
 interface DatabaseStore {
   databases: string[];
@@ -29,11 +30,13 @@ interface DatabaseStore {
   rowsPage: number;
   rowsLimit: number;
   rowsHasMore: boolean;
+  rowsRequestSeq: number;
   loadingDatabases: boolean;
   creatingDatabase: boolean;
   deletingDatabase: string | null;
   importingDatabase: string | null;
   exportingDatabase: string | null;
+  exportingTableCsv: string | null;
   loadingTables: boolean;
   loadingSchema: boolean;
   loadingRows: boolean;
@@ -63,6 +66,11 @@ interface DatabaseStore {
   deleteDatabase: (name: string) => Promise<DatabaseOperationResult>;
   importDatabase: (databaseName: string, filePath?: string) => Promise<DatabaseOperationResult>;
   exportDatabase: (databaseName: string, filePath?: string) => Promise<DatabaseOperationResult>;
+  exportTableCsv: (
+    databaseName: string,
+    tableName: string,
+    filePath?: string
+  ) => Promise<DatabaseOperationResult>;
 }
 
 function sortDatabases(databases: string[]): string[] {
@@ -77,6 +85,10 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function isRowFetchCancelled(error?: string): boolean {
+  return error === ROW_FETCH_CANCELLED_ERROR;
+}
+
 export const useDatabaseStore = create<DatabaseStore>((set, get) => ({
   databases: [],
   tables: [],
@@ -88,11 +100,13 @@ export const useDatabaseStore = create<DatabaseStore>((set, get) => ({
   rowsPage: 1,
   rowsLimit: DEFAULT_ROWS_LIMIT,
   rowsHasMore: false,
+  rowsRequestSeq: 0,
   loadingDatabases: false,
   creatingDatabase: false,
   deletingDatabase: null,
   importingDatabase: null,
   exportingDatabase: null,
+  exportingTableCsv: null,
   loadingTables: false,
   loadingSchema: false,
   loadingRows: false,
@@ -111,7 +125,7 @@ export const useDatabaseStore = create<DatabaseStore>((set, get) => ({
           error: 'IPC_UNAVAILABLE',
           databases: [],
         };
-        set({
+        set((state) => ({
           loadingDatabases: false,
           databases: [],
           selectedDatabase: null,
@@ -122,16 +136,18 @@ export const useDatabaseStore = create<DatabaseStore>((set, get) => ({
           rows: [],
           rowsPage: 1,
           rowsHasMore: false,
+          rowsRequestSeq: state.rowsRequestSeq + 1,
+          loadingRows: false,
           browserError: unavailable.message,
           queryResult: null,
           queryError: null,
-        });
+        }));
         return unavailable;
       }
 
       const result = await window.electronAPI.dbList();
       if (!result.success) {
-        set({
+        set((state) => ({
           loadingDatabases: false,
           databases: [],
           selectedDatabase: null,
@@ -142,10 +158,12 @@ export const useDatabaseStore = create<DatabaseStore>((set, get) => ({
           rows: [],
           rowsPage: 1,
           rowsHasMore: false,
+          rowsRequestSeq: state.rowsRequestSeq + 1,
+          loadingRows: false,
           browserError: result.error ?? result.message,
           queryResult: null,
           queryError: null,
-        });
+        }));
         return result;
       }
 
@@ -170,6 +188,8 @@ export const useDatabaseStore = create<DatabaseStore>((set, get) => ({
         rows: selectionChanged ? [] : state.rows,
         rowsPage: selectionChanged ? 1 : state.rowsPage,
         rowsHasMore: selectionChanged ? false : state.rowsHasMore,
+        rowsRequestSeq: selectionChanged ? state.rowsRequestSeq + 1 : state.rowsRequestSeq,
+        loadingRows: selectionChanged ? false : state.loadingRows,
         browserError: null,
       }));
 
@@ -180,7 +200,7 @@ export const useDatabaseStore = create<DatabaseStore>((set, get) => ({
       return result;
     } catch (error) {
       const message = getErrorMessage(error);
-      set({
+      set((state) => ({
         loadingDatabases: false,
         databases: [],
         selectedDatabase: null,
@@ -191,10 +211,12 @@ export const useDatabaseStore = create<DatabaseStore>((set, get) => ({
         rows: [],
         rowsPage: 1,
         rowsHasMore: false,
+        rowsRequestSeq: state.rowsRequestSeq + 1,
+        loadingRows: false,
         browserError: message,
         queryResult: null,
         queryError: null,
-      });
+      }));
       return {
         success: false,
         message: 'Failed to load databases',
@@ -205,7 +227,7 @@ export const useDatabaseStore = create<DatabaseStore>((set, get) => ({
   },
 
   selectDatabase: (name) => {
-    set({
+    set((state) => ({
       selectedDatabase: name,
       selectedTable: null,
       tables: [],
@@ -214,20 +236,24 @@ export const useDatabaseStore = create<DatabaseStore>((set, get) => ({
       rows: [],
       rowsPage: 1,
       rowsHasMore: false,
+      rowsRequestSeq: state.rowsRequestSeq + 1,
+      loadingRows: false,
       browserError: null,
-    });
+    }));
   },
 
   selectTable: (name) => {
-    set({
+    set((state) => ({
       selectedTable: name,
       schemaColumns: [],
       rowColumns: [],
       rows: [],
       rowsPage: 1,
       rowsHasMore: false,
+      rowsRequestSeq: state.rowsRequestSeq + 1,
+      loadingRows: false,
       browserError: null,
-    });
+    }));
   },
 
   fetchTables: async (databaseName) => {
@@ -239,7 +265,7 @@ export const useDatabaseStore = create<DatabaseStore>((set, get) => ({
         database: databaseName,
         tables: [],
       };
-      set({
+      set((state) => ({
         loadingTables: false,
         selectedDatabase: databaseName || null,
         selectedTable: null,
@@ -249,8 +275,10 @@ export const useDatabaseStore = create<DatabaseStore>((set, get) => ({
         rows: [],
         rowsPage: 1,
         rowsHasMore: false,
+        rowsRequestSeq: state.rowsRequestSeq + 1,
+        loadingRows: false,
         browserError: unavailable.message,
-      });
+      }));
       return unavailable;
     }
 
@@ -263,7 +291,7 @@ export const useDatabaseStore = create<DatabaseStore>((set, get) => ({
         database: databaseName,
         tables: [],
       };
-      set({
+      set((state) => ({
         loadingTables: false,
         selectedTable: null,
         tables: [],
@@ -272,8 +300,10 @@ export const useDatabaseStore = create<DatabaseStore>((set, get) => ({
         rows: [],
         rowsPage: 1,
         rowsHasMore: false,
+        rowsRequestSeq: state.rowsRequestSeq + 1,
+        loadingRows: false,
         browserError: invalid.message,
-      });
+      }));
       return invalid;
     }
 
@@ -281,7 +311,7 @@ export const useDatabaseStore = create<DatabaseStore>((set, get) => ({
     try {
       const result = await window.electronAPI.dbTables(normalizedDatabaseName);
       if (!result.success) {
-        set({
+        set((state) => ({
           loadingTables: false,
           selectedDatabase: normalizedDatabaseName,
           selectedTable: null,
@@ -291,8 +321,10 @@ export const useDatabaseStore = create<DatabaseStore>((set, get) => ({
           rows: [],
           rowsPage: 1,
           rowsHasMore: false,
+          rowsRequestSeq: state.rowsRequestSeq + 1,
+          loadingRows: false,
           browserError: result.error ?? result.message,
-        });
+        }));
         return result;
       }
 
@@ -316,6 +348,8 @@ export const useDatabaseStore = create<DatabaseStore>((set, get) => ({
         rows: tableSelectionChanged ? [] : state.rows,
         rowsPage: tableSelectionChanged ? 1 : state.rowsPage,
         rowsHasMore: tableSelectionChanged ? false : state.rowsHasMore,
+        rowsRequestSeq: tableSelectionChanged ? state.rowsRequestSeq + 1 : state.rowsRequestSeq,
+        loadingRows: tableSelectionChanged ? false : state.loadingRows,
         browserError: null,
       }));
 
@@ -343,7 +377,7 @@ export const useDatabaseStore = create<DatabaseStore>((set, get) => ({
         database: normalizedDatabaseName,
         tables: [],
       };
-      set({
+      set((state) => ({
         loadingTables: false,
         selectedDatabase: normalizedDatabaseName,
         selectedTable: null,
@@ -353,8 +387,10 @@ export const useDatabaseStore = create<DatabaseStore>((set, get) => ({
         rows: [],
         rowsPage: 1,
         rowsHasMore: false,
+        rowsRequestSeq: state.rowsRequestSeq + 1,
+        loadingRows: false,
         browserError: message,
-      });
+      }));
       return failed;
     }
   },
@@ -415,6 +451,20 @@ export const useDatabaseStore = create<DatabaseStore>((set, get) => ({
   },
 
   fetchTableRows: async (databaseName, tableName, page, limit) => {
+    const requestSeq = get().rowsRequestSeq + 1;
+    const cancelledResult: DatabaseTableRowsResult = {
+      success: false,
+      message: 'Row fetch cancelled',
+      error: ROW_FETCH_CANCELLED_ERROR,
+      database: databaseName,
+      table: tableName,
+      page,
+      limit,
+      hasMore: false,
+      columns: [],
+      rows: [],
+    };
+
     if (!window.electronAPI?.dbRows) {
       const unavailable: DatabaseTableRowsResult = {
         success: false,
@@ -433,15 +483,25 @@ export const useDatabaseStore = create<DatabaseStore>((set, get) => ({
         rowColumns: [],
         rows: [],
         rowsHasMore: false,
+        rowsRequestSeq: requestSeq,
         browserError: unavailable.message,
       });
       return unavailable;
     }
 
-    set({ loadingRows: true, browserError: null });
+    set({ loadingRows: true, browserError: null, rowsRequestSeq: requestSeq });
     try {
       const result = await window.electronAPI.dbRows(databaseName, tableName, page, limit);
+      if (get().rowsRequestSeq !== requestSeq) {
+        return cancelledResult;
+      }
+
       if (!result.success) {
+        if (isRowFetchCancelled(result.error)) {
+          set({ loadingRows: false });
+          return result;
+        }
+
         set({
           loadingRows: false,
           rowColumns: [],
@@ -465,6 +525,10 @@ export const useDatabaseStore = create<DatabaseStore>((set, get) => ({
       });
       return result;
     } catch (error) {
+      if (get().rowsRequestSeq !== requestSeq) {
+        return cancelledResult;
+      }
+
       const message = getErrorMessage(error);
       const failed: DatabaseTableRowsResult = {
         success: false,
@@ -701,6 +765,32 @@ export const useDatabaseStore = create<DatabaseStore>((set, get) => ({
       return {
         success: false,
         message: 'Failed to export database',
+        error: message,
+      };
+    }
+  },
+
+  exportTableCsv: async (databaseName: string, tableName: string, filePath?: string) => {
+    if (!window.electronAPI?.dbExportTableCsv) {
+      return {
+        success: false,
+        message: 'Database API is unavailable outside Electron mode',
+        error: 'IPC_UNAVAILABLE',
+      };
+    }
+
+    const exportKey = `${databaseName}.${tableName}`;
+    set({ exportingTableCsv: exportKey });
+    try {
+      const result = await window.electronAPI.dbExportTableCsv(databaseName, tableName, filePath);
+      set({ exportingTableCsv: null });
+      return result;
+    } catch (error) {
+      const message = getErrorMessage(error);
+      set({ exportingTableCsv: null });
+      return {
+        success: false,
+        message: 'Failed to export table CSV',
         error: message,
       };
     }

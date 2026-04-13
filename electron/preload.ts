@@ -142,6 +142,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   dbExport: (databaseName: string, filePath?: string) =>
     ipcRenderer.invoke('db:export', databaseName, filePath),
 
+  /** Export a table to CSV (opens save dialog if file path is omitted) */
+  dbExportTableCsv: (databaseName: string, tableName: string, filePath?: string) =>
+    ipcRenderer.invoke('db:export-table-csv', databaseName, tableName, filePath),
+
   /** List tables for a selected database */
   dbTables: (databaseName: string) => ipcRenderer.invoke('db:tables', databaseName),
 

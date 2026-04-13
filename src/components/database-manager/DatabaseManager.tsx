@@ -6,8 +6,10 @@
 
 import { useEffect, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   Database,
   Download,
+  History,
   Loader2,
   Play,
   Plus,
@@ -17,6 +19,7 @@ import {
   TerminalSquare,
   Trash2,
   Upload,
+  X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '../../lib/utils';
@@ -24,7 +27,14 @@ import { useDatabaseStore } from '../../stores/useDatabaseStore';
 
 const SYSTEM_DATABASES = new Set(['information_schema', 'mysql', 'performance_schema', 'sys']);
 const SQL_WRITE_KEYWORDS = new Set(['INSERT', 'UPDATE', 'DELETE']);
+const SQL_DANGEROUS_WRITE_KEYWORDS = new Set(['UPDATE', 'DELETE']);
+const SQL_HISTORY_MAX_ITEMS = 20;
 type DatabasePanelTab = 'browser' | 'sql';
+type PendingWriteQuery = {
+  databaseName: string;
+  sql: string;
+  keyword: 'UPDATE' | 'DELETE';
+};
 
 function isSystemDatabase(database: string): boolean {
   return SYSTEM_DATABASES.has(database.toLowerCase());
@@ -34,11 +44,23 @@ function isUserCancelled(error?: string): boolean {
   return error === 'CANCELLED';
 }
 
+function isRowFetchCancelled(error?: string): boolean {
+  return error === 'ROW_FETCH_CANCELLED';
+}
+
 function getSqlKeyword(sql: string): string {
   const normalized = sql.trim();
   if (!normalized) return '';
   const match = normalized.match(/^([A-Za-z]+)/);
   return match ? match[1].toUpperCase() : '';
+}
+
+function getHistoryLabel(sql: string): string {
+  const singleLine = sql.replace(/\s+/g, ' ').trim();
+  if (singleLine.length <= 96) {
+    return singleLine;
+  }
+  return `${singleLine.slice(0, 93)}...`;
 }
 
 const ROWS_LIMIT_OPTIONS = [25, 50, 100];
@@ -66,6 +88,7 @@ export function DatabaseManager() {
   const deletingDatabase = useDatabaseStore((state) => state.deletingDatabase);
   const importingDatabase = useDatabaseStore((state) => state.importingDatabase);
   const exportingDatabase = useDatabaseStore((state) => state.exportingDatabase);
+  const exportingTableCsv = useDatabaseStore((state) => state.exportingTableCsv);
   const fetchDatabases = useDatabaseStore((state) => state.fetchDatabases);
   const selectDatabase = useDatabaseStore((state) => state.selectDatabase);
   const selectTable = useDatabaseStore((state) => state.selectTable);
@@ -78,12 +101,16 @@ export function DatabaseManager() {
   const deleteDatabase = useDatabaseStore((state) => state.deleteDatabase);
   const importDatabase = useDatabaseStore((state) => state.importDatabase);
   const exportDatabase = useDatabaseStore((state) => state.exportDatabase);
+  const exportTableCsv = useDatabaseStore((state) => state.exportTableCsv);
 
   const hasInitialized = useRef(false);
   const [newDatabaseName, setNewDatabaseName] = useState('');
   const [activeTab, setActiveTab] = useState<DatabasePanelTab>('browser');
   const [sqlDatabase, setSqlDatabase] = useState('');
   const [sqlInput, setSqlInput] = useState('SELECT NOW() AS server_time');
+  const [sqlHistory, setSqlHistory] = useState<string[]>([]);
+  const [selectedHistorySql, setSelectedHistorySql] = useState('');
+  const [pendingWriteQuery, setPendingWriteQuery] = useState<PendingWriteQuery | null>(null);
 
   useEffect(() => {
     if (hasInitialized.current) return;
@@ -143,7 +170,7 @@ export function DatabaseManager() {
     }
 
     const rowsResult = await fetchTableRows(selectedDatabase, tableName, 1, rowsLimit);
-    if (!rowsResult.success) {
+    if (!rowsResult.success && !isRowFetchCancelled(rowsResult.error)) {
       toast.error(rowsResult.error ?? rowsResult.message);
     }
   };
@@ -157,7 +184,7 @@ export function DatabaseManager() {
     }
 
     const rowsResult = await fetchTableRows(selectedDatabase, selectedTable, rowsPage, rowsLimit);
-    if (!rowsResult.success) {
+    if (!rowsResult.success && !isRowFetchCancelled(rowsResult.error)) {
       toast.error(rowsResult.error ?? rowsResult.message);
     }
   };
@@ -165,7 +192,7 @@ export function DatabaseManager() {
   const loadPage = async (page: number) => {
     if (!selectedDatabase || !selectedTable) return;
     const result = await fetchTableRows(selectedDatabase, selectedTable, page, rowsLimit);
-    if (!result.success) {
+    if (!result.success && !isRowFetchCancelled(result.error)) {
       toast.error(result.error ?? result.message);
     }
   };
@@ -175,7 +202,7 @@ export function DatabaseManager() {
     const nextLimit = Number(event.target.value);
     if (!Number.isFinite(nextLimit) || nextLimit < 1) return;
     const result = await fetchTableRows(selectedDatabase, selectedTable, 1, nextLimit);
-    if (!result.success) {
+    if (!result.success && !isRowFetchCancelled(result.error)) {
       toast.error(result.error ?? result.message);
     }
   };
@@ -235,6 +262,45 @@ export function DatabaseManager() {
     toast.error(result.error ?? result.message);
   };
 
+  const handleExportTableCsv = async () => {
+    if (!selectedDatabase || !selectedTable) return;
+
+    const result = await exportTableCsv(selectedDatabase, selectedTable);
+    if (result.success) {
+      toast.success(result.filePath ? `${result.message} (${result.filePath})` : result.message);
+      return;
+    }
+
+    if (isUserCancelled(result.error)) return;
+    toast.error(result.error ?? result.message);
+  };
+
+  const pushSqlToHistory = (sql: string) => {
+    const normalized = sql.trim();
+    if (!normalized) return;
+
+    setSqlHistory((current) => {
+      const deduped = [normalized, ...current.filter((item) => item !== normalized)];
+      return deduped.slice(0, SQL_HISTORY_MAX_ITEMS);
+    });
+    setSelectedHistorySql('');
+  };
+
+  const executeSqlConsoleQuery = async (
+    databaseName: string,
+    sql: string,
+    allowWrite: boolean
+  ): Promise<void> => {
+    pushSqlToHistory(sql);
+    const result = await executeSqlQuery(databaseName, sql, allowWrite);
+    if (!result.success) {
+      toast.error(result.error ?? result.message);
+      return;
+    }
+
+    toast.success(result.message);
+  };
+
   const runSqlQuery = async () => {
     const databaseName = sqlDatabase.trim();
     const sql = sqlInput.trim();
@@ -249,22 +315,44 @@ export function DatabaseManager() {
     }
 
     const keyword = getSqlKeyword(sql);
-    let allowWrite = false;
-    if (SQL_WRITE_KEYWORDS.has(keyword)) {
-      const confirmed = window.confirm(
-        `Run ${keyword} query on "${databaseName}"?\n\nThis will modify data.`
-      );
-      if (!confirmed) return;
-      allowWrite = true;
-    }
-
-    const result = await executeSqlQuery(databaseName, sql, allowWrite);
-    if (!result.success) {
-      toast.error(result.error ?? result.message);
+    if (SQL_DANGEROUS_WRITE_KEYWORDS.has(keyword)) {
+      setPendingWriteQuery({
+        databaseName,
+        sql,
+        keyword: keyword as 'UPDATE' | 'DELETE',
+      });
       return;
     }
 
-    toast.success(result.message);
+    if (SQL_WRITE_KEYWORDS.has(keyword)) {
+      const confirmed = window.confirm(`Run ${keyword} query on "${databaseName}"?`);
+      if (!confirmed) return;
+      await executeSqlConsoleQuery(databaseName, sql, true);
+      return;
+    }
+
+    await executeSqlConsoleQuery(databaseName, sql, false);
+  };
+
+  const confirmPendingWriteQuery = async () => {
+    if (!pendingWriteQuery) return;
+    const { databaseName, sql } = pendingWriteQuery;
+    setPendingWriteQuery(null);
+    await executeSqlConsoleQuery(databaseName, sql, true);
+  };
+
+  const selectedTableExportKey =
+    selectedDatabase && selectedTable ? `${selectedDatabase}.${selectedTable}` : null;
+  const exportingSelectedTableCsv =
+    selectedTableExportKey !== null && exportingTableCsv === selectedTableExportKey;
+
+  const handleSqlInputKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+      event.preventDefault();
+      if (!runningQuery) {
+        void runSqlQuery();
+      }
+    }
   };
 
   return (
@@ -353,8 +441,9 @@ export function DatabaseManager() {
             </div>
 
             {loadingDatabases ? (
-              <div className="flex items-center justify-center py-10">
+              <div className="flex items-center justify-center gap-2 py-10 text-sm text-text-muted">
                 <Loader2 size={20} className="animate-spin text-accent-blue" />
+                Loading databases...
               </div>
             ) : databases.length === 0 ? (
               <div className="rounded-lg border border-dashed border-border-color p-6 text-center">
@@ -473,8 +562,9 @@ export function DatabaseManager() {
                 <p className="text-sm text-text-muted">Select a database to load tables.</p>
               </div>
             ) : loadingTables ? (
-              <div className="flex items-center justify-center py-8">
+              <div className="flex items-center justify-center gap-2 py-8 text-sm text-text-muted">
                 <Loader2 size={18} className="animate-spin text-accent-blue" />
+                Loading tables...
               </div>
             ) : tables.length === 0 ? (
               <div className="rounded-lg border border-dashed border-border-color p-6 text-center">
@@ -542,23 +632,45 @@ export function DatabaseManager() {
                       : 'Select a database and table to inspect schema and data'}
                   </p>
                 </div>
-                <button
-                  onClick={() => void refreshSelectedTable()}
-                  disabled={!selectedDatabase || !selectedTable || loadingSchema || loadingRows}
-                  className="flex items-center gap-1.5 rounded-md border border-border-color px-2.5 py-1.5 text-xs text-text-secondary hover:text-text-primary hover:bg-white/5 transition-all disabled:opacity-60"
-                  title="Refresh selected table"
-                >
-                  {loadingSchema || loadingRows ? (
-                    <Loader2 size={13} className="animate-spin" />
-                  ) : (
-                    <RefreshCw size={13} />
-                  )}
-                  Refresh
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => void handleExportTableCsv()}
+                    disabled={
+                      !selectedDatabase ||
+                      !selectedTable ||
+                      loadingSchema ||
+                      loadingRows ||
+                      exportingSelectedTableCsv
+                    }
+                    className="flex items-center gap-1.5 rounded-md border border-border-color px-2.5 py-1.5 text-xs text-text-secondary hover:text-text-primary hover:bg-white/5 transition-all disabled:opacity-60"
+                    title="Export selected table to CSV"
+                  >
+                    {exportingSelectedTableCsv ? (
+                      <Loader2 size={13} className="animate-spin" />
+                    ) : (
+                      <Download size={13} />
+                    )}
+                    Export CSV
+                  </button>
+                  <button
+                    onClick={() => void refreshSelectedTable()}
+                    disabled={!selectedDatabase || !selectedTable || loadingSchema || loadingRows}
+                    className="flex items-center gap-1.5 rounded-md border border-border-color px-2.5 py-1.5 text-xs text-text-secondary hover:text-text-primary hover:bg-white/5 transition-all disabled:opacity-60"
+                    title="Refresh selected table"
+                  >
+                    {loadingSchema || loadingRows ? (
+                      <Loader2 size={13} className="animate-spin" />
+                    ) : (
+                      <RefreshCw size={13} />
+                    )}
+                    Refresh
+                  </button>
+                </div>
               </div>
 
               {browserError && (
-                <div className="rounded-lg border border-status-stopped/35 bg-status-stopped/10 px-3 py-2 text-xs text-status-stopped">
+                <div className="flex items-center gap-2 rounded-lg border border-status-stopped/35 bg-status-stopped/10 px-3 py-2 text-xs text-status-stopped">
+                  <AlertTriangle size={14} />
                   {browserError}
                 </div>
               )}
@@ -736,7 +848,7 @@ export function DatabaseManager() {
                 <div>
                   <h2 className="text-sm font-semibold text-text-primary">SQL Console</h2>
                   <p className="text-xs text-text-muted">
-                    Allowed read queries: SELECT, SHOW, DESCRIBE, EXPLAIN. Write queries require confirmation.
+                    Allowed read queries: SELECT, SHOW, DESCRIBE, EXPLAIN. Press Ctrl+Enter to run.
                   </p>
                 </div>
               </div>
@@ -800,6 +912,50 @@ export function DatabaseManager() {
                 </div>
               </div>
 
+              <div className="grid grid-cols-1 lg:grid-cols-5 gap-3">
+                <div className="lg:col-span-3">
+                  <label
+                    htmlFor="sql-console-history"
+                    className="text-xs font-semibold uppercase tracking-wider text-text-muted"
+                  >
+                    Session History
+                  </label>
+                  <div className="mt-1 relative">
+                    <History
+                      size={13}
+                      className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted"
+                    />
+                    <select
+                      id="sql-console-history"
+                      value={selectedHistorySql}
+                      onChange={(event) => {
+                        const selectedSql = event.target.value;
+                        setSelectedHistorySql(selectedSql);
+                        if (selectedSql) {
+                          setSqlInput(selectedSql);
+                        }
+                      }}
+                      disabled={runningQuery || sqlHistory.length === 0}
+                      className="w-full rounded-lg border border-border-color bg-bg-secondary pl-8 pr-3 py-2.5 text-sm text-text-primary outline-none transition-all focus:border-accent-blue/50 disabled:opacity-60"
+                    >
+                      <option value="">
+                        {sqlHistory.length === 0 ? 'No query history in this session' : 'Select a previous query'}
+                      </option>
+                      {sqlHistory.map((entry, index) => (
+                        <option key={`history-${index}`} value={entry}>
+                          {`${index + 1}. ${getHistoryLabel(entry)}`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div className="lg:col-span-2 flex items-end">
+                  <div className="w-full rounded-lg border border-border-color bg-bg-secondary/40 px-3 py-2 text-xs text-text-muted">
+                    Shortcut: <span className="text-text-primary font-semibold">Ctrl+Enter</span>
+                  </div>
+                </div>
+              </div>
+
               <div>
                 <label
                   htmlFor="sql-console-input"
@@ -811,15 +967,27 @@ export function DatabaseManager() {
                   id="sql-console-input"
                   value={sqlInput}
                   onChange={(event) => setSqlInput(event.target.value)}
+                  onKeyDown={handleSqlInputKeyDown}
                   className="mt-1 w-full min-h-[180px] rounded-lg border border-border-color bg-bg-secondary px-3 py-2.5 text-sm font-mono text-text-primary outline-none transition-all focus:border-accent-blue/50 resize-y"
                   placeholder="SELECT * FROM users LIMIT 100"
                   spellCheck={false}
                 />
+                <p className="mt-1 text-xs text-text-muted">
+                  UPDATE and DELETE require a warning confirmation before execution.
+                </p>
               </div>
 
               {queryError && (
-                <div className="rounded-lg border border-status-stopped/35 bg-status-stopped/10 px-3 py-2 text-xs text-status-stopped">
+                <div className="flex items-center gap-2 rounded-lg border border-status-stopped/35 bg-status-stopped/10 px-3 py-2 text-xs text-status-stopped">
+                  <AlertTriangle size={14} />
                   {queryError}
+                </div>
+              )}
+
+              {runningQuery && (
+                <div className="flex items-center gap-2 rounded-lg border border-accent-blue/30 bg-accent-blue/10 px-3 py-2 text-xs text-accent-blue">
+                  <Loader2 size={14} className="animate-spin" />
+                  Executing query...
                 </div>
               )}
 
@@ -835,14 +1003,12 @@ export function DatabaseManager() {
                     <span className="px-2 py-0.5 rounded border border-accent-blue/30 bg-accent-blue/15 text-accent-blue font-semibold uppercase tracking-wider">
                       {queryResult.queryType}
                     </span>
-                    {queryResult.affectedRows !== null ? (
-                      <span className="text-text-muted">
-                        Affected rows: <span className="text-text-primary">{queryResult.affectedRows}</span>
-                      </span>
-                    ) : (
+                    {queryResult.affectedRows === null ? (
                       <span className="text-text-muted">
                         Rows: <span className="text-text-primary">{queryResult.rowCount}</span>
                       </span>
+                    ) : (
+                      <span className="text-text-muted">Write query completed</span>
                     )}
                     {queryResult.truncated && (
                       <span className="text-accent-orange">
@@ -850,6 +1016,25 @@ export function DatabaseManager() {
                       </span>
                     )}
                   </div>
+
+                  {queryResult.affectedRows !== null && (
+                    <div
+                      className={cn(
+                        'rounded-lg border px-3 py-2',
+                        queryResult.affectedRows > 0
+                          ? 'border-status-running/35 bg-status-running/10'
+                          : 'border-accent-orange/35 bg-accent-orange/10'
+                      )}
+                    >
+                      <p className="text-sm font-semibold text-text-primary">
+                        {queryResult.queryType.toUpperCase()} query executed.
+                      </p>
+                      <p className="text-xs text-text-muted mt-0.5">
+                        <span className="font-semibold text-text-primary">{queryResult.affectedRows}</span> rows
+                        affected.
+                      </p>
+                    </div>
+                  )}
 
                   {queryResult.columns.length > 0 ? (
                     <div className="overflow-auto rounded-lg border border-border-color max-h-[420px]">
@@ -908,6 +1093,59 @@ export function DatabaseManager() {
           )}
         </div>
       </div>
+
+      {pendingWriteQuery && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4">
+          <div className="w-full max-w-2xl rounded-xl border border-status-stopped/35 bg-bg-card shadow-xl">
+            <div className="flex items-start justify-between gap-3 border-b border-border-color px-4 py-3">
+              <div className="flex items-start gap-2">
+                <AlertTriangle size={18} className="mt-0.5 text-status-stopped" />
+                <div>
+                  <h3 className="text-sm font-semibold text-text-primary">
+                    Confirm {pendingWriteQuery.keyword} Query
+                  </h3>
+                  <p className="text-xs text-text-muted mt-0.5">
+                    This action will modify data in <span className="font-semibold">{pendingWriteQuery.databaseName}</span>.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setPendingWriteQuery(null)}
+                className="rounded-md border border-border-color p-1.5 text-text-muted hover:text-text-primary hover:bg-white/5 transition-all"
+                aria-label="Close warning modal"
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            <div className="space-y-3 px-4 py-4">
+              <div className="rounded-lg border border-status-stopped/30 bg-status-stopped/10 px-3 py-2 text-xs text-status-stopped">
+                Review the SQL statement carefully before continuing.
+              </div>
+              <pre className="max-h-[220px] overflow-auto rounded-lg border border-border-color bg-bg-secondary p-3 text-xs text-text-secondary">
+                {pendingWriteQuery.sql}
+              </pre>
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  onClick={() => setPendingWriteQuery(null)}
+                  disabled={runningQuery}
+                  className="rounded-md border border-border-color px-3 py-2 text-xs text-text-secondary hover:text-text-primary hover:bg-white/5 transition-all disabled:opacity-60"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => void confirmPendingWriteQuery()}
+                  disabled={runningQuery}
+                  className="flex items-center gap-1.5 rounded-md border border-status-stopped/35 bg-status-stopped/10 px-3 py-2 text-xs font-semibold text-status-stopped hover:bg-status-stopped/20 transition-all disabled:opacity-60"
+                >
+                  {runningQuery ? <Loader2 size={13} className="animate-spin" /> : <AlertTriangle size={13} />}
+                  Run {pendingWriteQuery.keyword}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

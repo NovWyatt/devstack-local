@@ -37,23 +37,35 @@ interface CommandResult {
   stderr: string;
 }
 
+interface ExecCommandOptions {
+  signal?: AbortSignal;
+  timeoutErrorMessage?: string;
+}
+
 const MYSQL_EXEC_TIMEOUT_MS = 30000;
 const MYSQL_IMPORT_TIMEOUT_MS = 180000;
 const MYSQL_DUMP_TIMEOUT_MS = 180000;
-const MYSQL_QUERY_TIMEOUT_MS = 30000;
+const MYSQL_QUERY_TIMEOUT_MS = 15000;
+const MYSQL_ROW_FETCH_TIMEOUT_MS = 15000;
+const MYSQL_CSV_EXPORT_TIMEOUT_MS = 60000;
+const MYSQL_READ_MAX_EXECUTION_MS = 12000;
 const MYSQL_IDENTIFIER_PATTERN = /^[A-Za-z0-9_]+$/;
 const TABLE_BROWSE_MAX_LIMIT = 200;
 const TABLE_BROWSE_DEFAULT_LIMIT = 50;
 const QUERY_RESULT_MAX_ROWS = 500;
 const EXEC_MAX_BUFFER_BYTES = 10 * 1024 * 1024;
 const QUERY_MAX_BUFFER_BYTES = 25 * 1024 * 1024;
+const CSV_EXPORT_MAX_BUFFER_BYTES = 50 * 1024 * 1024;
 const SQL_QUERY_MAX_LENGTH = 50000;
+const ROW_FETCH_CANCELLED_ERROR = 'ROW_FETCH_CANCELLED';
 const SYSTEM_DATABASES = new Set(['information_schema', 'mysql', 'performance_schema', 'sys']);
 const READ_QUERY_TYPES = new Set<DatabaseQueryType>(['select', 'show', 'describe', 'explain']);
 const WRITE_QUERY_TYPES = new Set<DatabaseQueryType>(['insert', 'update', 'delete']);
 
 export class DatabaseService {
   private processBridge: DatabaseProcessBridge;
+  private activeRowsFetchAbortController: AbortController | null = null;
+  private rowsFetchGeneration = 0;
 
   constructor(processBridge: DatabaseProcessBridge) {
     this.processBridge = processBridge;
@@ -234,6 +246,14 @@ export class DatabaseService {
     const fallbackLimit = Number.isFinite(limitRaw)
       ? Math.max(1, Math.floor(limitRaw))
       : TABLE_BROWSE_DEFAULT_LIMIT;
+    const fetchGeneration = this.rowsFetchGeneration + 1;
+    this.rowsFetchGeneration = fetchGeneration;
+
+    if (this.activeRowsFetchAbortController) {
+      this.activeRowsFetchAbortController.abort();
+    }
+    const fetchAbortController = new AbortController();
+    this.activeRowsFetchAbortController = fetchAbortController;
 
     try {
       this.ensureMysqlRunning();
@@ -258,8 +278,29 @@ export class DatabaseService {
           '--execute',
           `SELECT * FROM \`${databaseName}\`.\`${tableName}\` LIMIT ${limitWithLookAhead} OFFSET ${offset};`,
         ],
-        MYSQL_EXEC_TIMEOUT_MS
+        MYSQL_ROW_FETCH_TIMEOUT_MS,
+        EXEC_MAX_BUFFER_BYTES,
+        {
+          signal: fetchAbortController.signal,
+          timeoutErrorMessage: `Row fetch timed out after ${Math.floor(MYSQL_ROW_FETCH_TIMEOUT_MS / 1000)}s`,
+        }
       );
+
+      if (fetchGeneration !== this.rowsFetchGeneration) {
+        this.log('warning', `Cancelled stale row fetch for ${databaseName}.${tableName}`);
+        return {
+          success: false,
+          message: 'Row fetch cancelled',
+          error: ROW_FETCH_CANCELLED_ERROR,
+          database: databaseName,
+          table: tableName,
+          page,
+          limit,
+          hasMore: false,
+          columns: [],
+          rows: [],
+        };
+      }
 
       const lines = this.parseMysqlBatchLines(stdout);
       const columns = lines.length > 0 ? lines[0].split('\t') : [];
@@ -283,6 +324,22 @@ export class DatabaseService {
         rows,
       };
     } catch (error) {
+      if (this.isAbortError(error) || fetchGeneration !== this.rowsFetchGeneration) {
+        this.log('warning', `Cancelled stale row fetch for ${fallbackDatabase}.${fallbackTable}`);
+        return {
+          success: false,
+          message: 'Row fetch cancelled',
+          error: ROW_FETCH_CANCELLED_ERROR,
+          database: fallbackDatabase,
+          table: fallbackTable,
+          page: fallbackPage,
+          limit: fallbackLimit,
+          hasMore: false,
+          columns: [],
+          rows: [],
+        };
+      }
+
       const message = this.getErrorMessage(error);
       this.log('error', `Failed to load rows: ${message}`);
       return {
@@ -297,6 +354,10 @@ export class DatabaseService {
         columns: [],
         rows: [],
       };
+    } finally {
+      if (this.activeRowsFetchAbortController === fetchAbortController) {
+        this.activeRowsFetchAbortController = null;
+      }
     }
   }
 
@@ -329,7 +390,10 @@ export class DatabaseService {
           mysqlPath,
           [...this.buildMysqlConnectionArgs(), '--batch', '--execute', writeSql, databaseName],
           MYSQL_QUERY_TIMEOUT_MS,
-          QUERY_MAX_BUFFER_BYTES
+          QUERY_MAX_BUFFER_BYTES,
+          {
+            timeoutErrorMessage: `SQL write query timed out after ${Math.floor(MYSQL_QUERY_TIMEOUT_MS / 1000)}s`,
+          }
         );
 
         const { columns, rows } = this.parseTabularResult(stdout);
@@ -355,7 +419,10 @@ export class DatabaseService {
         mysqlPath,
         [...this.buildMysqlConnectionArgs(), '--batch', '--execute', executableReadSql, databaseName],
         MYSQL_QUERY_TIMEOUT_MS,
-        QUERY_MAX_BUFFER_BYTES
+        QUERY_MAX_BUFFER_BYTES,
+        {
+          timeoutErrorMessage: `SQL query timed out after ${Math.floor(MYSQL_QUERY_TIMEOUT_MS / 1000)}s`,
+        }
       );
 
       const parsed = this.parseTabularResult(stdout);
@@ -497,6 +564,74 @@ export class DatabaseService {
       return {
         success: false,
         message: 'Failed to export database',
+        error: message,
+      };
+    }
+  }
+
+  async exportTableToCsv(
+    databaseNameRaw: string,
+    tableNameRaw: string,
+    outputPath?: string
+  ): Promise<DatabaseOperationResult> {
+    let destinationPath = '';
+
+    try {
+      this.ensureMysqlRunning();
+      const databaseName = this.validateDatabaseName(databaseNameRaw, { allowSystem: true });
+      const tableName = this.validateTableName(tableNameRaw);
+
+      const mysqlPath = this.resolveMysqlToolPath('mysql.exe');
+      if (!mysqlPath) {
+        throw new Error('MySQL client (mysql.exe) not found');
+      }
+      assertExecutable(mysqlPath, 'MySQL client');
+
+      destinationPath = this.resolveTableCsvExportPath(databaseName, tableName, outputPath);
+      ensureDir(path.dirname(destinationPath));
+
+      const { stdout } = await this.execFileCommand(
+        mysqlPath,
+        [
+          ...this.buildMysqlConnectionArgs(),
+          '--batch',
+          '--execute',
+          `SELECT * FROM \`${databaseName}\`.\`${tableName}\`;`,
+        ],
+        MYSQL_CSV_EXPORT_TIMEOUT_MS,
+        CSV_EXPORT_MAX_BUFFER_BYTES,
+        {
+          timeoutErrorMessage: `CSV export timed out after ${Math.floor(MYSQL_CSV_EXPORT_TIMEOUT_MS / 1000)}s`,
+        }
+      );
+
+      const parsed = this.parseTabularResult(stdout);
+      const csvContent = this.buildCsvContent(parsed.columns, parsed.rows);
+      fs.writeFileSync(destinationPath, csvContent, 'utf-8');
+
+      this.log(
+        'success',
+        `Exported ${databaseName}.${tableName} to CSV (${parsed.rows.length} rows) at ${destinationPath}`
+      );
+      return {
+        success: true,
+        message: `Table "${databaseName}.${tableName}" exported to CSV (${parsed.rows.length} rows)`,
+        filePath: destinationPath,
+      };
+    } catch (error) {
+      if (destinationPath && fs.existsSync(destinationPath)) {
+        try {
+          fs.unlinkSync(destinationPath);
+        } catch {
+          // Ignore cleanup errors.
+        }
+      }
+
+      const message = this.getErrorMessage(error);
+      this.log('error', `Failed to export table CSV: ${message}`);
+      return {
+        success: false,
+        message: 'Failed to export table CSV',
         error: message,
       };
     }
@@ -739,7 +874,7 @@ export class DatabaseService {
 
   private buildReadQuerySql(sql: string, queryType: DatabaseQueryType): string {
     if (queryType === 'select') {
-      return `SELECT * FROM (${sql}) AS __devstack_query LIMIT ${QUERY_RESULT_MAX_ROWS + 1}`;
+      return `SELECT /*+ MAX_EXECUTION_TIME(${MYSQL_READ_MAX_EXECUTION_MS}) */ * FROM (${sql}) AS __devstack_query LIMIT ${QUERY_RESULT_MAX_ROWS + 1}`;
     }
     return sql;
   }
@@ -794,36 +929,131 @@ export class DatabaseService {
 
   private resolveExportPath(databaseName: string, outputPath?: string): string {
     if (outputPath && outputPath.trim()) {
-      const resolvedPath = path.resolve(outputPath);
-      if (path.extname(resolvedPath).toLowerCase() === '.sql') {
-        return resolvedPath;
-      }
-      return `${resolvedPath}.sql`;
+      return this.sanitizeExportDestination(
+        outputPath,
+        '.sql',
+        this.sanitizeFilenameSegment(databaseName, 'database')
+      );
     }
 
     const exportDir = ensureDir(path.join(getRuntimeRoot(), 'mysql', 'exports'));
-    const timestamp = new Date()
-      .toISOString()
-      .replace(/[-:]/g, '')
-      .replace('T', '-')
-      .slice(0, 15);
+    const safeDatabaseName = this.sanitizeFilenameSegment(databaseName, 'database');
+    return path.join(exportDir, `${safeDatabaseName}-${this.buildTimestampToken()}.sql`);
+  }
 
-    return path.join(exportDir, `${databaseName}-${timestamp}.sql`);
+  private resolveTableCsvExportPath(
+    databaseName: string,
+    tableName: string,
+    outputPath?: string
+  ): string {
+    const safeDatabaseName = this.sanitizeFilenameSegment(databaseName, 'database');
+    const safeTableName = this.sanitizeFilenameSegment(tableName, 'table');
+
+    if (outputPath && outputPath.trim()) {
+      return this.sanitizeExportDestination(
+        outputPath,
+        '.csv',
+        `${safeDatabaseName}-${safeTableName}`
+      );
+    }
+
+    const exportDir = ensureDir(path.join(getRuntimeRoot(), 'mysql', 'exports'));
+    return path.join(
+      exportDir,
+      `${safeDatabaseName}-${safeTableName}-${this.buildTimestampToken()}.csv`
+    );
+  }
+
+  private sanitizeExportDestination(
+    rawPath: string,
+    requiredExtension: '.sql' | '.csv',
+    fallbackBaseName: string
+  ): string {
+    const resolvedPath = path.resolve(rawPath);
+    const destinationDir = path.dirname(resolvedPath);
+    const requestedName = path.parse(resolvedPath).name;
+    const safeName = this.sanitizeFilenameSegment(requestedName, fallbackBaseName);
+    return path.join(destinationDir, `${safeName}${requiredExtension}`);
+  }
+
+  private sanitizeFilenameSegment(value: string, fallback: string): string {
+    const normalized = value
+      .trim()
+      .replace(/[^a-zA-Z0-9_-]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 80);
+    return normalized || fallback;
+  }
+
+  private buildTimestampToken(): string {
+    return new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+  }
+
+  private buildCsvContent(columns: string[], rows: DatabaseTableRow[]): string {
+    if (columns.length === 0) {
+      return '';
+    }
+
+    const header = columns.map((column) => this.encodeCsvCell(column)).join(',');
+    const csvRows = rows.map((row) =>
+      columns.map((column) => this.encodeCsvCell(row[column] ?? null)).join(',')
+    );
+
+    return [header, ...csvRows].join('\r\n');
+  }
+
+  private encodeCsvCell(value: string | null): string {
+    const normalized = value === null ? '' : this.decodeMysqlBatchEscapes(value);
+    const escaped = normalized.replace(/"/g, '""');
+    return `"${escaped}"`;
+  }
+
+  private decodeMysqlBatchEscapes(value: string): string {
+    return value.replace(/\\([0btnr\\])/g, (_match, token: string) => {
+      if (token === '0') return '\0';
+      if (token === 'b') return '\b';
+      if (token === 't') return '\t';
+      if (token === 'n') return '\n';
+      if (token === 'r') return '\r';
+      if (token === '\\') return '\\';
+      return token;
+    });
   }
 
   private async execFileCommand(
     command: string,
     args: string[],
     timeoutMs: number,
-    maxBufferBytes: number = EXEC_MAX_BUFFER_BYTES
+    maxBufferBytes: number = EXEC_MAX_BUFFER_BYTES,
+    options: ExecCommandOptions = {}
   ): Promise<CommandResult> {
     return new Promise<CommandResult>((resolve, reject) => {
       execFile(
         command,
         args,
-        { windowsHide: true, timeout: timeoutMs, maxBuffer: maxBufferBytes },
+        {
+          windowsHide: true,
+          timeout: timeoutMs,
+          maxBuffer: maxBufferBytes,
+          signal: options.signal,
+        },
         (error, stdout, stderr) => {
           if (error) {
+            if (this.isTimeoutError(error)) {
+              reject(
+                new Error(
+                  options.timeoutErrorMessage ??
+                    `Command timed out after ${Math.floor(timeoutMs / 1000)}s`
+                )
+              );
+              return;
+            }
+
+            if (this.isAbortError(error)) {
+              reject(error);
+              return;
+            }
+
             const detail = stderr?.trim() || error.message;
             reject(new Error(detail));
             return;
@@ -989,6 +1219,40 @@ export class DatabaseService {
 
       reader.pipe(child.stdin);
     });
+  }
+
+  private isTimeoutError(error: unknown): boolean {
+    if (!(error instanceof Error)) {
+      return false;
+    }
+
+    const nodeError = error as NodeJS.ErrnoException & {
+      killed?: boolean;
+      signal?: NodeJS.Signals | null;
+    };
+
+    if (nodeError.code === 'ETIMEDOUT') {
+      return true;
+    }
+
+    if (nodeError.killed && nodeError.signal === 'SIGTERM' && /timed out/i.test(nodeError.message)) {
+      return true;
+    }
+
+    return /timed out/i.test(nodeError.message);
+  }
+
+  private isAbortError(error: unknown): boolean {
+    if (!(error instanceof Error)) {
+      return false;
+    }
+
+    const nodeError = error as NodeJS.ErrnoException;
+    if (error.name === 'AbortError') {
+      return true;
+    }
+
+    return nodeError.code === 'ABORT_ERR' || /aborted/i.test(error.message);
   }
 
   private log(level: string, message: string): void {

@@ -37,6 +37,19 @@ const databaseService = new DatabaseService(processManager);
 /** Track whether we're already quitting to prevent double-stop */
 let isQuitting = false;
 
+function sanitizeFilenameSegment(value: string, fallback: string): string {
+  const sanitized = value
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 80);
+  return sanitized || fallback;
+}
+
+function buildTimestampToken(): string {
+  return new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+}
+
 /**
  * Create the main application window.
  */
@@ -287,12 +300,8 @@ function registerIpcHandlers(): void {
     try {
       let targetPath = filePath?.trim() || '';
       if (!targetPath) {
-        const safeDatabaseName = databaseName.trim().replace(/[^a-zA-Z0-9_-]/g, '_') || 'database';
-        const timestamp = new Date()
-          .toISOString()
-          .replace(/[-:]/g, '')
-          .replace('T', '-')
-          .slice(0, 15);
+        const safeDatabaseName = sanitizeFilenameSegment(databaseName, 'database');
+        const timestamp = buildTimestampToken();
 
         const ownerWindow = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
         const dialogOptions = {
@@ -317,6 +326,41 @@ function registerIpcHandlers(): void {
       return { success: false, message: 'Failed to export database', error: message };
     }
   });
+
+  ipcMain.handle(
+    'db:export-table-csv',
+    async (event, databaseName: string, tableName: string, filePath?: string) => {
+      try {
+        let targetPath = filePath?.trim() || '';
+        if (!targetPath) {
+          const safeDatabaseName = sanitizeFilenameSegment(databaseName, 'database');
+          const safeTableName = sanitizeFilenameSegment(tableName, 'table');
+          const timestamp = buildTimestampToken();
+
+          const ownerWindow = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+          const dialogOptions = {
+            title: 'Export Table CSV',
+            defaultPath: `${safeDatabaseName}-${safeTableName}-${timestamp}.csv`,
+            filters: [{ name: 'CSV Files', extensions: ['csv'] }],
+          };
+          const selected = ownerWindow
+            ? await dialog.showSaveDialog(ownerWindow, dialogOptions)
+            : await dialog.showSaveDialog(dialogOptions);
+
+          if (selected.canceled || !selected.filePath) {
+            return { success: false, message: 'CSV export cancelled', error: 'CANCELLED' };
+          }
+
+          targetPath = selected.filePath;
+        }
+
+        return databaseService.exportTableToCsv(databaseName, tableName, targetPath);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return { success: false, message: 'Failed to export table CSV', error: message };
+      }
+    }
+  );
 
   ipcMain.handle('db:tables', async (_event, databaseName: string) => {
     return databaseService.listTables(databaseName);
