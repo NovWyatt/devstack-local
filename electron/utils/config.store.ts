@@ -8,7 +8,11 @@
  */
 
 import Store from 'electron-store';
-import type { DomainRecord } from '../../src/types/domain.types';
+import type { DomainRecord } from '../../src/types/domain.types.ts';
+import type {
+  RemoteConnectionRecord,
+  RemoteConnectionSecretRecord,
+} from '../../src/types/remote.types.ts';
 
 /** Shape of the persisted configuration */
 export interface DevStackConfig {
@@ -31,6 +35,10 @@ export interface DevStackConfig {
   autoRestart: boolean;
   /** Persisted local domains and vhost definitions */
   domains: DomainRecord[];
+  /** Persisted remote connection metadata (non-sensitive) */
+  remoteConnections: RemoteConnectionRecord[];
+  /** Persisted encrypted remote secrets (sensitive) */
+  remoteSensitiveSecrets: RemoteConnectionSecretRecord[];
 }
 
 /** Default configuration values */
@@ -48,6 +56,8 @@ const defaults: DevStackConfig = {
   },
   autoRestart: false,
   domains: [],
+  remoteConnections: [],
+  remoteSensitiveSecrets: [],
 };
 
 /**
@@ -164,5 +174,25 @@ export const ConfigStore = {
   /** Persist domain list */
   setDomains(domains: DomainRecord[]): void {
     ConfigStore.set('domains', domains);
+  },
+
+  /** Get remote connection metadata */
+  getRemoteConnections(): RemoteConnectionRecord[] {
+    return ConfigStore.get('remoteConnections');
+  },
+
+  /** Persist remote connection metadata */
+  setRemoteConnections(connections: RemoteConnectionRecord[]): void {
+    ConfigStore.set('remoteConnections', connections);
+  },
+
+  /** Get encrypted remote secrets */
+  getRemoteSensitiveSecrets(): RemoteConnectionSecretRecord[] {
+    return ConfigStore.get('remoteSensitiveSecrets');
+  },
+
+  /** Persist encrypted remote secrets */
+  setRemoteSensitiveSecrets(secrets: RemoteConnectionSecretRecord[]): void {
+    ConfigStore.set('remoteSensitiveSecrets', secrets);
   },
 };

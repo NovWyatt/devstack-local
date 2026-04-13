@@ -13,6 +13,14 @@ import type {
   DatabaseTableSchemaResult,
 } from './database.types';
 import type { PhpExtension, PhpOperationResult, PhpVersion } from './php.types';
+import type {
+  RemoteConnectionConnectResult,
+  RemoteConnectionInput,
+  RemoteConnectionOperationResult,
+  RemoteConnectionSummary,
+  RemoteConnectionTestResult,
+  RemoteDirectoryListResult,
+} from './remote.types';
 
 /** Supported service identifiers */
 export type ServiceName = 'apache' | 'mysql';
@@ -244,6 +252,36 @@ export interface ElectronAPI {
     sql: string,
     allowWrite?: boolean
   ) => Promise<DatabaseQueryResult>;
+
+  /** List saved remote connections with runtime status. */
+  remoteList: () => Promise<RemoteConnectionSummary[]>;
+
+  /** Create a new remote connection. */
+  remoteCreate: (payload: RemoteConnectionInput) => Promise<RemoteConnectionOperationResult>;
+
+  /** Update a saved remote connection. */
+  remoteUpdate: (
+    id: string,
+    payload: RemoteConnectionInput
+  ) => Promise<RemoteConnectionOperationResult>;
+
+  /** Delete a saved remote connection. */
+  remoteDelete: (id: string) => Promise<RemoteConnectionOperationResult>;
+
+  /** Test a remote connection without creating an active session. */
+  remoteTest: (
+    payload: RemoteConnectionInput,
+    existingConnectionId?: string
+  ) => Promise<RemoteConnectionTestResult>;
+
+  /** Connect a saved remote connection and load its root preview. */
+  remoteConnect: (id: string) => Promise<RemoteConnectionConnectResult>;
+
+  /** Disconnect a saved remote connection. */
+  remoteDisconnect: (id: string) => Promise<RemoteConnectionOperationResult>;
+
+  /** Refresh the root preview for an active remote connection. */
+  remoteListRoot: (id: string) => Promise<RemoteDirectoryListResult>;
 }
 
 /**

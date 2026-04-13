@@ -1,0 +1,27 @@
+[
+  {
+    "name": "Add, edit, connect, and delete connection",
+    "success": true,
+    "details": "CRUD flow passed with preserved encrypted password"
+  },
+  {
+    "name": "Validation rejects invalid connection input",
+    "success": true,
+    "details": "Host must not include a protocol prefix"
+  },
+  {
+    "name": "Test connection loads root preview and closes ephemeral client",
+    "success": true,
+    "details": "Preview entries=1, disconnectCalls=1"
+  },
+  {
+    "name": "Timeout handling aborts connect and leaves connection in error state",
+    "success": true,
+    "details": "Connect timed out after 0s"
+  },
+  {
+    "name": "Disconnect cleanup succeeds even when transport close throws",
+    "success": true,
+    "details": "Disconnected \"Cleanup FTP\""
+  }
+]

@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "verify": "npm run build && npx tsx scripts/phase2_6_real_tests.ts && npx tsx scripts/phase3_real_tests.ts && npx tsx scripts/phase3_1_hardening_tests.ts && npx tsx scripts/phase4_1_real_tests.ts && npx tsx scripts/phase4_2_real_tests.ts && npx tsx scripts/phase4_3_real_tests.ts && npx tsx scripts/phase4_4_real_tests.ts && npx tsx scripts/phase4_5_release_checks.ts",
+    "verify": "npm run build && npx tsx scripts/phase2_6_real_tests.ts && npx tsx scripts/phase3_real_tests.ts && npx tsx scripts/phase3_1_hardening_tests.ts && npx tsx scripts/phase4_1_real_tests.ts && npx tsx scripts/phase4_2_real_tests.ts && npx tsx scripts/phase4_3_real_tests.ts && npx tsx scripts/phase4_4_real_tests.ts && npx tsx scripts/phase4_5_release_checks.ts && npx tsx scripts/phase5_1_real_tests.ts",
     "release:checks": "npx tsx scripts/phase4_5_release_checks.ts",
     "preview": "vite preview",
     "electron:dev": "vite --mode electron",
@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
+    "basic-ftp": "^5.2.2",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.0.0",
     "electron-store": "^11.0.2",
@@ -26,6 +27,7 @@
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.20.0",
     "sonner": "^2.0.7",
+    "ssh2-sftp-client": "^12.1.1",
     "tailwind-merge": "^2.1.0",
     "tree-kill": "^1.2.2",
     "zustand": "^4.4.7"
@@ -40,6 +42,7 @@
     "electron-builder": "^24.9.1",
     "postcss": "^8.4.32",
     "tailwindcss": "^3.3.6",
+    "tsx": "^4.21.0",
     "typescript": "^5.3.3",
     "vite": "^5.0.8",
     "vite-plugin-electron": "^0.28.0",

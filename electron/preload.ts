@@ -11,34 +11,39 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron';
+import type { LogEntry, ServiceName, ServiceStatusPayload } from '../src/types';
+import type {
+  RemoteConnectionInput,
+  RemoteConnectionSummary,
+} from '../src/types/remote.types';
 
 contextBridge.exposeInMainWorld('electronAPI', {
   // ─── Service Management ────────────────────────────────────────
 
   /** Start a service (apache or mysql) with optional configuration */
-  startService: (service: string, config?: Record<string, unknown>) => {
+  startService: (service: ServiceName, config?: Record<string, unknown>) => {
     return ipcRenderer.invoke('service:start', service, config);
   },
 
   /** Stop a running service */
-  stopService: (service: string) => {
+  stopService: (service: ServiceName) => {
     return ipcRenderer.invoke('service:stop', service);
   },
 
   /** Restart a service (stop + start) */
-  restartService: (service: string) => {
+  restartService: (service: ServiceName) => {
     return ipcRenderer.invoke('service:restart', service);
   },
 
   /** Get the current status of a service */
-  getServiceStatus: (service: string) => {
+  getServiceStatus: (service: ServiceName) => {
     return ipcRenderer.invoke('service:status', service);
   },
 
   // ─── Log & Event Listeners ────────────────────────────────────
 
   /** Subscribe to real-time log entries from the main process */
-  onLogEntry: (callback: (log: unknown) => void) => {
+  onLogEntry: (callback: (log: LogEntry) => void) => {
     ipcRenderer.on('log:entry', (_event, log) => callback(log));
   },
 
@@ -48,7 +53,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   /** Subscribe to service status change events */
-  onServiceStatusChange: (callback: (payload: unknown) => void) => {
+  onServiceStatusChange: (callback: (payload: ServiceStatusPayload) => void) => {
     ipcRenderer.on('service:status-change', (_event, payload) => callback(payload));
   },
 
@@ -163,6 +168,32 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Execute SQL query in selected database */
   dbQuery: (databaseName: string, sql: string, allowWrite?: boolean) =>
     ipcRenderer.invoke('db:query', databaseName, sql, allowWrite),
+
+  /** List saved remote connections */
+  remoteList: (): Promise<RemoteConnectionSummary[]> => ipcRenderer.invoke('remote:list'),
+
+  /** Create a saved remote connection */
+  remoteCreate: (payload: RemoteConnectionInput) => ipcRenderer.invoke('remote:create', payload),
+
+  /** Update a saved remote connection */
+  remoteUpdate: (id: string, payload: RemoteConnectionInput) =>
+    ipcRenderer.invoke('remote:update', id, payload),
+
+  /** Delete a saved remote connection */
+  remoteDelete: (id: string) => ipcRenderer.invoke('remote:delete', id),
+
+  /** Test a remote connection without opening a saved session */
+  remoteTest: (payload: RemoteConnectionInput, existingConnectionId?: string) =>
+    ipcRenderer.invoke('remote:test', payload, existingConnectionId),
+
+  /** Connect a saved remote connection */
+  remoteConnect: (id: string) => ipcRenderer.invoke('remote:connect', id),
+
+  /** Disconnect a saved remote connection */
+  remoteDisconnect: (id: string) => ipcRenderer.invoke('remote:disconnect', id),
+
+  /** Refresh root listing for an active remote connection */
+  remoteListRoot: (id: string) => ipcRenderer.invoke('remote:list-root', id),
 
   /** Listen for download progress updates */
   onPhpDownloadProgress: (callback: (version: string, progress: number) => void) => {

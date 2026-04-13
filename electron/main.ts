@@ -10,11 +10,13 @@
  */
 
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
+import type { OpenDialogOptions } from 'electron';
 import path from 'path';
 import { ProcessManager } from './services/process.manager';
 import { PhpService } from './services/php.service';
 import { DomainService } from './services/domain.service';
 import { DatabaseService } from './services/database.service';
+import { RemoteService } from './services/remote.service';
 import {
   getApacheLogDir,
   getApacheRuntimeConfigPath,
@@ -24,7 +26,9 @@ import {
   getRuntimeRoot,
   resolveAppIconPath,
 } from './utils/runtime.paths';
+import { createSensitiveValueCodec } from './utils/secret.util';
 import type { DomainInput } from '../src/types/domain.types';
+import type { RemoteConnectionInput } from '../src/types/remote.types';
 
 /** Singleton reference to the main application window */
 let mainWindow: BrowserWindow | null = null;
@@ -41,6 +45,11 @@ const domainService = new DomainService(processManager, phpService);
 
 /** Database manager */
 const databaseService = new DatabaseService(processManager);
+
+/** Remote connection manager */
+const remoteService = new RemoteService(processManager, {
+  secretCodec: createSensitiveValueCodec(),
+});
 
 /** Track whether we're already quitting to prevent double-stop */
 let isQuitting = false;
@@ -119,6 +128,7 @@ function setupPackagedSmokeExitTimer(): void {
     if (isQuitting) return;
     isQuitting = true;
     try {
+      await remoteService.disconnectAll();
       await processManager.stopAllServices();
     } catch (err) {
       console.error('[smoke] Failed to stop services before exit:', err);
@@ -281,9 +291,9 @@ function registerIpcHandlers(): void {
       let sourcePath = filePath?.trim() || '';
       if (!sourcePath) {
         const ownerWindow = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
-        const dialogOptions = {
+        const dialogOptions: OpenDialogOptions = {
           title: 'Import SQL File',
-          properties: ['openFile'] as const,
+          properties: ['openFile'],
           filters: [{ name: 'SQL Files', extensions: ['sql'] }],
         };
         const selected = ownerWindow
@@ -386,6 +396,41 @@ function registerIpcHandlers(): void {
     return databaseService.executeQuery(databaseName, sql, !!allowWrite);
   });
 
+  ipcMain.handle('remote:list', async () => {
+    return remoteService.listConnections();
+  });
+
+  ipcMain.handle('remote:create', async (_event, payload: RemoteConnectionInput) => {
+    return remoteService.createConnection(payload);
+  });
+
+  ipcMain.handle('remote:update', async (_event, id: string, payload: RemoteConnectionInput) => {
+    return remoteService.updateConnection(id, payload);
+  });
+
+  ipcMain.handle('remote:delete', async (_event, id: string) => {
+    return remoteService.deleteConnection(id);
+  });
+
+  ipcMain.handle(
+    'remote:test',
+    async (_event, payload: RemoteConnectionInput, existingConnectionId?: string) => {
+      return remoteService.testConnection(payload, existingConnectionId);
+    }
+  );
+
+  ipcMain.handle('remote:connect', async (_event, id: string) => {
+    return remoteService.connectConnection(id);
+  });
+
+  ipcMain.handle('remote:disconnect', async (_event, id: string) => {
+    return remoteService.disconnectConnection(id);
+  });
+
+  ipcMain.handle('remote:list-root', async (_event, id: string) => {
+    return remoteService.listRemoteRoot(id);
+  });
+
   // Application
   ipcMain.handle('app:diagnostics', async () => {
     const php = phpService.getPhpCgiDiagnostics();
@@ -436,6 +481,7 @@ function registerIpcHandlers(): void {
 
     if (result.response === 1) {
       isQuitting = true;
+      await remoteService.disconnectAll();
       await processManager.stopAllServices();
       app.quit();
     }
@@ -469,6 +515,7 @@ app.on('before-quit', async (event) => {
   event.preventDefault();
 
   try {
+    await remoteService.disconnectAll();
     await processManager.stopAllServices();
   } catch (err) {
     console.error('Error stopping services on quit:', err);
