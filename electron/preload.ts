@@ -71,6 +71,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   exitApp: () => {
     return ipcRenderer.invoke('app:exit');
   },
+  appDiagnostics: () => {
+    return ipcRenderer.invoke('app:diagnostics');
+  },
 
   // ─── PHP Version Management ──────────────────────────────────────
 

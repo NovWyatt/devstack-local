@@ -1,0 +1,27 @@
+[
+  {
+    "name": "electron-builder NSIS release contract",
+    "success": true,
+    "details": "NSIS target is configured and uninstall keeps app data"
+  },
+  {
+    "name": "packaging excludes mutable runtime artifact patterns",
+    "success": true,
+    "details": "Validated 11 mutable path exclusions"
+  },
+  {
+    "name": "required bundled binaries are present in repo resources",
+    "success": true,
+    "details": "Core binaries found; PHP versions with CGI: 8.3.30"
+  },
+  {
+    "name": "mutable runtime artifacts are untracked from git index",
+    "success": true,
+    "details": "No mutable runtime artifacts are tracked under resources/binaries"
+  },
+  {
+    "name": "first-run writable runtime directories are creatable outside resources",
+    "success": true,
+    "details": "Runtime root=C:\\Users\\Wyatt\\AppData\\Local\\Temp\\devstack-phase4-5-runtime-Qj4TkR\\.devstack-runtime"
+  }
+]

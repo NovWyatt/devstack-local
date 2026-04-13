@@ -14,5 +14,10 @@ resources/binaries/apache/logs/
 resources/binaries/apache/conf/httpd.devstack.conf
 resources/binaries/apache/conf/extra/httpd-devstack-vhosts.conf
 resources/binaries/mysql/data/
+resources/binaries/mysql/tmp/
 resources/binaries/php/*/php.ini
 resources/binaries/php/*/php.ini.bak
+resources/binaries/php/*/backups/
+resources/binaries/php/*/logs/
+resources/binaries/php/*/tmp/
+resources/binaries/php/*/sessions/

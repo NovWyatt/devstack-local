@@ -51,6 +51,27 @@ cd devstack-local
 npm install
 ```
 
+### Local binary setup (required for real Electron mode)
+
+Ensure the bundled service binaries exist under `resources/binaries/`:
+
+```text
+resources/binaries/
+  apache/
+    bin/httpd.exe
+  mysql/
+    bin/mysqld.exe
+    bin/mysql.exe
+    bin/mysqldump.exe
+  php/
+    <version>/php.exe
+    <version>/php-cgi.exe
+```
+
+Notes:
+- Runtime mutable files are not kept in git under `resources/binaries`.
+- On first run, writable runtime data is created under Electron `userData` (`runtime/apache`, `runtime/mysql`, `runtime/php`).
+
 ## 💻 Development
 
 ```bash
@@ -72,6 +93,26 @@ The app runs at `http://localhost:3000` in browser mode. In browser mode, servic
 | `npm run preview` | Preview production build |
 | `npm run electron:dev` | Start with Electron integration |
 | `npm run electron:build` | Build production Electron app |
+| `npm run verify` | Full build + real phase validation checks |
+| `npm run release:checks` | Phase 4.5 release contract checks |
+| `npm run smoke:packaged` | Build unpacked package + packaged startup smoke |
+
+## Verification and packaging gates
+
+```bash
+# Required release gate
+npm run verify
+
+# Required packaged smoke gate
+npm run smoke:packaged
+```
+
+## Packaged installer notes
+
+- Default Windows installer target is NSIS (`release/DevStack Local Setup <version>.exe`).
+- Installer is configured to preserve app data on uninstall (`deleteAppDataOnUninstall=false`).
+- Writable runtime data (Apache/MySQL/PHP runtime files, logs, generated config) stays in Electron `userData`, not inside the install directory.
+- Bundled binaries in packaged builds are read-only resources copied from `resources/binaries` via `extraResources`.
 
 ## 📂 Project Structure
 

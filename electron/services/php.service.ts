@@ -187,6 +187,26 @@ export class PhpService {
     return this.activeVersion;
   }
 
+  getPhpCgiDiagnostics(): {
+    activeVersion: string;
+    processName: string;
+    running: boolean;
+    port: number | null;
+    runtimeIniPath: string;
+  } {
+    const processName = `php-cgi-${this.activeVersion}`;
+    const running = !!this.processManager && this.processManager.isRunning(processName);
+    const resolvedPort = this.phpCgiPortMap.get(this.activeVersion) ?? this.getPhpCgiPort(this.activeVersion);
+
+    return {
+      activeVersion: this.activeVersion,
+      processName,
+      running,
+      port: running ? resolvedPort : null,
+      runtimeIniPath: getPhpRuntimeIniPath(this.activeVersion),
+    };
+  }
+
   async ensurePhpCgiRunning(version: string): Promise<number> {
     if (!this.processManager) {
       throw new Error('ProcessManager not set - cannot manage PHP-CGI');

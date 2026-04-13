@@ -15,7 +15,15 @@ import { ProcessManager } from './services/process.manager';
 import { PhpService } from './services/php.service';
 import { DomainService } from './services/domain.service';
 import { DatabaseService } from './services/database.service';
-import { resolveAppIconPath } from './utils/runtime.paths';
+import {
+  getApacheLogDir,
+  getApacheRuntimeConfigPath,
+  getApacheVhostConfigPath,
+  getMySQLDataDir,
+  getMySQLTmpDir,
+  getRuntimeRoot,
+  resolveAppIconPath,
+} from './utils/runtime.paths';
 import type { DomainInput } from '../src/types/domain.types';
 
 /** Singleton reference to the main application window */
@@ -379,6 +387,40 @@ function registerIpcHandlers(): void {
   });
 
   // Application
+  ipcMain.handle('app:diagnostics', async () => {
+    const php = phpService.getPhpCgiDiagnostics();
+
+    return {
+      timestamp: new Date().toISOString(),
+      services: {
+        apache: processManager.getServiceStatus('apache'),
+        mysql: processManager.getServiceStatus('mysql'),
+        phpCgi: {
+          activeVersion: php.activeVersion,
+          processName: php.processName,
+          running: php.running,
+          port: php.port,
+        },
+      },
+      paths: {
+        runtimeRoot: getRuntimeRoot(),
+        apache: {
+          runtimeConfig: getApacheRuntimeConfigPath(),
+          vhostConfig: getApacheVhostConfigPath(),
+          logDir: getApacheLogDir(),
+        },
+        mysql: {
+          dataDir: getMySQLDataDir(),
+          tmpDir: getMySQLTmpDir(),
+        },
+        php: {
+          activeVersion: php.activeVersion,
+          runtimeIniPath: php.runtimeIniPath,
+        },
+      },
+    };
+  });
+
   ipcMain.handle('app:exit', async () => {
     if (!mainWindow) return;
 

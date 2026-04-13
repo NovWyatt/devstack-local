@@ -4,24 +4,32 @@ Date: 2026-04-13
 
 ## Current Project Status
 
-- Phase 4.4 Database Manager hardening/polish is complete.
-- Main-process database service now supports:
-  - database CRUD/import/export (Phase 4.1)
-  - table/schema/rows browser (Phase 4.2)
-  - safe SQL console execution (Phase 4.3)
-  - table CSV export + row fetch cancellation safety (Phase 4.4)
-- DB IPC bridge now includes:
-  - `db:list`, `db:create`, `db:delete`, `db:import`, `db:export`
-  - `db:tables`, `db:schema`, `db:rows`
-  - `db:query`
-  - `db:export-table-csv`
-- `/database` route now includes:
-  - Browser tab (schema + paged rows + table CSV export)
-  - SQL Console tab (guarded query execution, session history, Ctrl+Enter)
-- Existing service runtime architecture remains preserved:
+- Phase 4.5 repository stabilization / release cleanup is complete.
+- Phase 1 through 4.5 are implemented and verified.
+- Real Electron service runtime remains stable:
   - Apache real process
   - MySQL real process
   - PHP-CGI real process
+
+### Database scope status
+
+- Phase 4.1: DB CRUD/import/export complete
+- Phase 4.2: table/schema/rows browser complete
+- Phase 4.3: SQL console complete
+- Phase 4.4: DB hardening/polish complete
+
+### Phase 4.5 additions
+
+- Runtime artifact hygiene:
+  - mutable files under `resources/binaries/apache/logs`, `resources/binaries/mysql/data`, and runtime Apache conf are untracked from git
+  - `.gitignore` hardened for mutable runtime-only subpaths
+- Release contract hardening:
+  - `electron-builder.json` explicitly preserves app data on uninstall (`deleteAppDataOnUninstall=false`)
+  - mutable runtime artifacts explicitly excluded from packaged `extraResources`
+- Diagnostics:
+  - low-risk read-only dashboard panel added for Apache/MySQL/PHP-CGI state, ports, and runtime config paths
+- Release validation:
+  - `scripts/phase4_5_release_checks.ts` added and wired into `npm run verify`
 
 ## Latest Stable State (Verification)
 
@@ -34,28 +42,28 @@ Date: 2026-04-13
   - `scripts/phase4_2_real_tests.ts`: PASS (3/3)
   - `scripts/phase4_3_real_tests.ts`: PASS (3/3)
   - `scripts/phase4_4_real_tests.ts`: PASS (4/4)
+  - `scripts/phase4_5_release_checks.ts`: PASS (5/5)
 - `npm run smoke:packaged`: PASS
   - unpacked package build: PASS
   - packaged resource checks: PASS
   - packaged startup smoke launch/exit: PASS
+- NSIS installer path check: PASS
+  - `release/DevStack Local Setup 0.1.0.exe` built (unsigned local test build)
 
 ## Recommended Next Exact Task
 
-If approved, start Phase 5 as a new scoped milestone. Keep the same release discipline:
+If approved, start Phase 5 as a new scoped milestone.
 
-1. Maintain strict TypeScript + runtime guardrails.
-2. Keep Electron real-service architecture unchanged.
-3. Keep `npm run verify` + `npm run smoke:packaged` mandatory before milestone handoff.
+1. Keep runtime/process architecture unchanged.
+2. Keep strict TypeScript and safety guardrails.
+3. Keep `npm run verify` + `npm run smoke:packaged` mandatory before handoff.
 
 ## Warnings and Important Constraints
 
-- Do not reintroduce mock lifecycle control in Electron main process.
-- Keep strict query guardrails:
+- Do not reintroduce mutable runtime files into tracked `resources/binaries/*`.
+- Keep bundled binaries tracked; keep logs/data/generated config under runtime (`userData`) only.
+- Keep SQL guardrails unchanged:
   - blocked: `DROP DATABASE`, `DROP TABLE`, `TRUNCATE`
-  - allowed read families only: `SELECT`, `SHOW`, `DESCRIBE`, `EXPLAIN`
   - write queries require explicit confirmation
-- Row browsing now has cancellation protection (`ROW_FETCH_CANCELLED`) to avoid stale overwrite behavior.
-- SQL query execution is timeout-bounded and should surface timeout-style errors clearly.
-- Identifier validation remains strict for database/table names.
 - Domain writes to system hosts still require Administrator privileges on Windows.
-- Runtime-generated and packaged artifacts may modify tracked files under the current repo layout.
+- Packaging/runtime-generated artifacts can still touch tracked files under current repository layout during verification runs.

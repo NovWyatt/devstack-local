@@ -19,9 +19,13 @@
         "!apache/conf/httpd.devstack.conf",
         "!apache/conf/extra/httpd-devstack-vhosts.conf",
         "!mysql/data/**",
+        "!mysql/tmp/**",
         "!php/*/php.ini",
         "!php/*/php.ini.bak",
-        "!php/*/backups/**"
+        "!php/*/backups/**",
+        "!php/*/logs/**",
+        "!php/*/tmp/**",
+        "!php/*/sessions/**"
       ]
     },
     {
@@ -36,6 +40,7 @@
   "nsis": {
     "oneClick": false,
     "perMachine": true,
-    "allowToChangeInstallationDirectory": true
+    "allowToChangeInstallationDirectory": true,
+    "deleteAppDataOnUninstall": false
   }
 }

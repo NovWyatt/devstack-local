@@ -74,6 +74,38 @@ export interface ServiceStatusPayload {
   status: ServiceState;
 }
 
+export interface PhpCgiDiagnostics {
+  activeVersion: string;
+  processName: string;
+  running: boolean;
+  port: number | null;
+}
+
+export interface AppDiagnostics {
+  timestamp: string;
+  services: {
+    apache: ServiceState;
+    mysql: ServiceState;
+    phpCgi: PhpCgiDiagnostics;
+  };
+  paths: {
+    runtimeRoot: string;
+    apache: {
+      runtimeConfig: string;
+      vhostConfig: string;
+      logDir: string;
+    };
+    mysql: {
+      dataDir: string;
+      tmpDir: string;
+    };
+    php: {
+      activeVersion: string;
+      runtimeIniPath: string;
+    };
+  };
+}
+
 /**
  * The API exposed to the renderer process via contextBridge (preload script).
  * Provides methods for service control and log management.
@@ -111,6 +143,9 @@ export interface ElectronAPI {
 
   /** Request graceful app exit (confirmation dialog in main process) */
   exitApp: () => Promise<void>;
+
+  /** Get read-only service/runtime diagnostics */
+  appDiagnostics: () => Promise<AppDiagnostics>;
 
   /** Get all available PHP versions */
   phpGetVersions: () => Promise<PhpVersion[]>;

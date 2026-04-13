@@ -6,6 +6,7 @@
  */
 
 import { ServiceCard } from './ServiceCard';
+import { HealthDiagnosticsPanel } from './HealthDiagnosticsPanel';
 import { SystemLogs } from './SystemLogs';
 
 export function Dashboard() {
@@ -16,6 +17,8 @@ export function Dashboard() {
         <ServiceCard service="apache" />
         <ServiceCard service="mysql" />
       </div>
+
+      <HealthDiagnosticsPanel />
 
       {/* System Logs Panel */}
       <SystemLogs />
