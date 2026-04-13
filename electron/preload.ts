@@ -153,6 +153,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   dbRows: (databaseName: string, tableName: string, page: number, limit: number) =>
     ipcRenderer.invoke('db:rows', databaseName, tableName, page, limit),
 
+  /** Execute SQL query in selected database */
+  dbQuery: (databaseName: string, sql: string, allowWrite?: boolean) =>
+    ipcRenderer.invoke('db:query', databaseName, sql, allowWrite),
+
   /** Listen for download progress updates */
   onPhpDownloadProgress: (callback: (version: string, progress: number) => void) => {
     ipcRenderer.on('php:download-progress', (_event, version, progress) =>

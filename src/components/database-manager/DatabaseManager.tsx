@@ -1,7 +1,7 @@
 /**
  * DatabaseManager
  *
- * MySQL database management + safe table browser UI for Phase 4.2.
+ * MySQL database management + safe table browser + SQL console for Phase 4.3.
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -9,10 +9,12 @@ import {
   Database,
   Download,
   Loader2,
+  Play,
   Plus,
   RefreshCw,
   Shield,
   Table2,
+  TerminalSquare,
   Trash2,
   Upload,
 } from 'lucide-react';
@@ -21,6 +23,8 @@ import { cn } from '../../lib/utils';
 import { useDatabaseStore } from '../../stores/useDatabaseStore';
 
 const SYSTEM_DATABASES = new Set(['information_schema', 'mysql', 'performance_schema', 'sys']);
+const SQL_WRITE_KEYWORDS = new Set(['INSERT', 'UPDATE', 'DELETE']);
+type DatabasePanelTab = 'browser' | 'sql';
 
 function isSystemDatabase(database: string): boolean {
   return SYSTEM_DATABASES.has(database.toLowerCase());
@@ -28,6 +32,13 @@ function isSystemDatabase(database: string): boolean {
 
 function isUserCancelled(error?: string): boolean {
   return error === 'CANCELLED';
+}
+
+function getSqlKeyword(sql: string): string {
+  const normalized = sql.trim();
+  if (!normalized) return '';
+  const match = normalized.match(/^([A-Za-z]+)/);
+  return match ? match[1].toUpperCase() : '';
 }
 
 const ROWS_LIMIT_OPTIONS = [25, 50, 100];
@@ -47,7 +58,10 @@ export function DatabaseManager() {
   const loadingTables = useDatabaseStore((state) => state.loadingTables);
   const loadingSchema = useDatabaseStore((state) => state.loadingSchema);
   const loadingRows = useDatabaseStore((state) => state.loadingRows);
+  const runningQuery = useDatabaseStore((state) => state.runningQuery);
   const browserError = useDatabaseStore((state) => state.browserError);
+  const queryResult = useDatabaseStore((state) => state.queryResult);
+  const queryError = useDatabaseStore((state) => state.queryError);
   const creatingDatabase = useDatabaseStore((state) => state.creatingDatabase);
   const deletingDatabase = useDatabaseStore((state) => state.deletingDatabase);
   const importingDatabase = useDatabaseStore((state) => state.importingDatabase);
@@ -58,6 +72,8 @@ export function DatabaseManager() {
   const fetchTables = useDatabaseStore((state) => state.fetchTables);
   const fetchTableSchema = useDatabaseStore((state) => state.fetchTableSchema);
   const fetchTableRows = useDatabaseStore((state) => state.fetchTableRows);
+  const executeSqlQuery = useDatabaseStore((state) => state.executeSqlQuery);
+  const clearSqlQueryState = useDatabaseStore((state) => state.clearSqlQueryState);
   const createDatabase = useDatabaseStore((state) => state.createDatabase);
   const deleteDatabase = useDatabaseStore((state) => state.deleteDatabase);
   const importDatabase = useDatabaseStore((state) => state.importDatabase);
@@ -65,6 +81,9 @@ export function DatabaseManager() {
 
   const hasInitialized = useRef(false);
   const [newDatabaseName, setNewDatabaseName] = useState('');
+  const [activeTab, setActiveTab] = useState<DatabasePanelTab>('browser');
+  const [sqlDatabase, setSqlDatabase] = useState('');
+  const [sqlInput, setSqlInput] = useState('SELECT NOW() AS server_time');
 
   useEffect(() => {
     if (hasInitialized.current) return;
@@ -72,6 +91,23 @@ export function DatabaseManager() {
     void fetchDatabases();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (databases.length === 0) {
+      setSqlDatabase('');
+      return;
+    }
+
+    setSqlDatabase((current) => {
+      if (current && databases.includes(current)) {
+        return current;
+      }
+      if (selectedDatabase && databases.includes(selectedDatabase)) {
+        return selectedDatabase;
+      }
+      return databases[0];
+    });
+  }, [databases, selectedDatabase]);
 
   const refreshDatabases = async () => {
     const result = await fetchDatabases();
@@ -199,6 +235,38 @@ export function DatabaseManager() {
     toast.error(result.error ?? result.message);
   };
 
+  const runSqlQuery = async () => {
+    const databaseName = sqlDatabase.trim();
+    const sql = sqlInput.trim();
+    if (!databaseName) {
+      toast.error('Select a database for SQL Console');
+      return;
+    }
+
+    if (!sql) {
+      toast.error('SQL query is required');
+      return;
+    }
+
+    const keyword = getSqlKeyword(sql);
+    let allowWrite = false;
+    if (SQL_WRITE_KEYWORDS.has(keyword)) {
+      const confirmed = window.confirm(
+        `Run ${keyword} query on "${databaseName}"?\n\nThis will modify data.`
+      );
+      if (!confirmed) return;
+      allowWrite = true;
+    }
+
+    const result = await executeSqlQuery(databaseName, sql, allowWrite);
+    if (!result.success) {
+      toast.error(result.error ?? result.message);
+      return;
+    }
+
+    toast.success(result.message);
+  };
+
   return (
     <div className="space-y-6 animate-fade-in">
       <div className="flex items-center gap-3">
@@ -208,7 +276,7 @@ export function DatabaseManager() {
         <div>
           <h1 className="text-xl font-bold text-text-primary">Database Manager</h1>
           <p className="text-sm text-text-muted">
-            Manage local MySQL databases and safely browse table schema and rows.
+            Manage local MySQL databases, browse tables, and run safe SQL console queries.
           </p>
         </div>
       </div>
@@ -438,199 +506,404 @@ export function DatabaseManager() {
         </div>
 
         <div className="xl:col-span-3 rounded-xl border border-border-color bg-bg-card p-5 space-y-5">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-sm font-semibold text-text-primary">Table Browser</h2>
-              <p className="text-xs text-text-muted mt-0.5">
-                {selectedDatabase && selectedTable
-                  ? `${selectedDatabase}.${selectedTable}`
-                  : 'Select a database and table to inspect schema and data'}
-              </p>
-            </div>
+          <div className="flex items-center gap-1 p-1 rounded-lg bg-white/[0.03] border border-border-color w-fit">
             <button
-              onClick={() => void refreshSelectedTable()}
-              disabled={!selectedDatabase || !selectedTable || loadingSchema || loadingRows}
-              className="flex items-center gap-1.5 rounded-md border border-border-color px-2.5 py-1.5 text-xs text-text-secondary hover:text-text-primary hover:bg-white/5 transition-all disabled:opacity-60"
-              title="Refresh selected table"
-            >
-              {loadingSchema || loadingRows ? (
-                <Loader2 size={13} className="animate-spin" />
-              ) : (
-                <RefreshCw size={13} />
+              onClick={() => setActiveTab('browser')}
+              className={cn(
+                'px-3 py-1.5 rounded-md text-xs font-semibold transition-all',
+                activeTab === 'browser'
+                  ? 'bg-accent-blue/20 text-accent-blue'
+                  : 'text-text-muted hover:text-text-primary hover:bg-white/5'
               )}
-              Refresh
+            >
+              Browser
+            </button>
+            <button
+              onClick={() => setActiveTab('sql')}
+              className={cn(
+                'px-3 py-1.5 rounded-md text-xs font-semibold transition-all',
+                activeTab === 'sql'
+                  ? 'bg-accent-blue/20 text-accent-blue'
+                  : 'text-text-muted hover:text-text-primary hover:bg-white/5'
+              )}
+            >
+              SQL Console
             </button>
           </div>
 
-          {browserError && (
-            <div className="rounded-lg border border-status-stopped/35 bg-status-stopped/10 px-3 py-2 text-xs text-status-stopped">
-              {browserError}
-            </div>
-          )}
+          {activeTab === 'browser' ? (
+            <>
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-sm font-semibold text-text-primary">Table Browser</h2>
+                  <p className="text-xs text-text-muted mt-0.5">
+                    {selectedDatabase && selectedTable
+                      ? `${selectedDatabase}.${selectedTable}`
+                      : 'Select a database and table to inspect schema and data'}
+                  </p>
+                </div>
+                <button
+                  onClick={() => void refreshSelectedTable()}
+                  disabled={!selectedDatabase || !selectedTable || loadingSchema || loadingRows}
+                  className="flex items-center gap-1.5 rounded-md border border-border-color px-2.5 py-1.5 text-xs text-text-secondary hover:text-text-primary hover:bg-white/5 transition-all disabled:opacity-60"
+                  title="Refresh selected table"
+                >
+                  {loadingSchema || loadingRows ? (
+                    <Loader2 size={13} className="animate-spin" />
+                  ) : (
+                    <RefreshCw size={13} />
+                  )}
+                  Refresh
+                </button>
+              </div>
 
-          {!selectedDatabase ? (
-            <div className="rounded-lg border border-dashed border-border-color p-10 text-center">
-              <p className="text-sm text-text-muted">Select a database to start browsing.</p>
-            </div>
-          ) : !selectedTable ? (
-            <div className="rounded-lg border border-dashed border-border-color p-10 text-center">
-              <p className="text-sm text-text-muted">
-                {tables.length === 0
-                  ? 'This database has no tables.'
-                  : 'Select a table from the left panel to view schema and rows.'}
-              </p>
-            </div>
+              {browserError && (
+                <div className="rounded-lg border border-status-stopped/35 bg-status-stopped/10 px-3 py-2 text-xs text-status-stopped">
+                  {browserError}
+                </div>
+              )}
+
+              {!selectedDatabase ? (
+                <div className="rounded-lg border border-dashed border-border-color p-10 text-center">
+                  <p className="text-sm text-text-muted">Select a database to start browsing.</p>
+                </div>
+              ) : !selectedTable ? (
+                <div className="rounded-lg border border-dashed border-border-color p-10 text-center">
+                  <p className="text-sm text-text-muted">
+                    {tables.length === 0
+                      ? 'This database has no tables.'
+                      : 'Select a table from the left panel to view schema and rows.'}
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <section className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-xs font-semibold uppercase tracking-wider text-text-muted">
+                        Schema ({schemaColumns.length} columns)
+                      </h3>
+                      {loadingSchema && <Loader2 size={14} className="animate-spin text-accent-blue" />}
+                    </div>
+
+                    {schemaColumns.length === 0 && !loadingSchema ? (
+                      <div className="rounded-lg border border-dashed border-border-color p-5 text-center">
+                        <p className="text-sm text-text-muted">No schema data available.</p>
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto rounded-lg border border-border-color">
+                        <table className="min-w-full text-xs">
+                          <thead className="bg-bg-secondary/70 text-text-muted">
+                            <tr>
+                              <th className="px-3 py-2 text-left font-semibold">Field</th>
+                              <th className="px-3 py-2 text-left font-semibold">Type</th>
+                              <th className="px-3 py-2 text-left font-semibold">Null</th>
+                              <th className="px-3 py-2 text-left font-semibold">Key</th>
+                              <th className="px-3 py-2 text-left font-semibold">Default</th>
+                              <th className="px-3 py-2 text-left font-semibold">Extra</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {schemaColumns.map((column) => (
+                              <tr key={column.field} className="border-t border-border-color">
+                                <td className="px-3 py-2 font-mono text-text-primary">{column.field}</td>
+                                <td className="px-3 py-2 font-mono text-text-secondary">{column.type}</td>
+                                <td className="px-3 py-2 text-text-secondary">
+                                  {column.nullable ? 'YES' : 'NO'}
+                                </td>
+                                <td className="px-3 py-2 text-text-secondary">{column.key || '-'}</td>
+                                <td className="px-3 py-2 text-text-secondary">
+                                  {column.defaultValue === null ? 'NULL' : column.defaultValue || '-'}
+                                </td>
+                                <td className="px-3 py-2 text-text-secondary">{column.extra || '-'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </section>
+
+                  <section className="space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <h3 className="text-xs font-semibold uppercase tracking-wider text-text-muted">
+                        Rows ({rows.length} on page {rowsPage})
+                      </h3>
+
+                      <div className="flex items-center gap-2">
+                        <label htmlFor="rows-limit" className="text-xs text-text-muted">
+                          Rows per page
+                        </label>
+                        <select
+                          id="rows-limit"
+                          value={rowsLimit}
+                          onChange={(event) => void handleLimitChange(event)}
+                          disabled={loadingRows}
+                          className="rounded-md border border-border-color bg-bg-secondary px-2.5 py-1.5 text-xs text-text-primary outline-none"
+                        >
+                          {ROWS_LIMIT_OPTIONS.map((value) => (
+                            <option key={value} value={value}>
+                              {value}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    {loadingRows ? (
+                      <div className="flex items-center justify-center py-12">
+                        <Loader2 size={22} className="animate-spin text-accent-blue" />
+                        <span className="ml-3 text-sm text-text-muted">Loading rows...</span>
+                      </div>
+                    ) : rowColumns.length === 0 ? (
+                      <div className="rounded-lg border border-dashed border-border-color p-6 text-center">
+                        <p className="text-sm text-text-muted">No row data available.</p>
+                      </div>
+                    ) : (
+                      <div className="overflow-auto rounded-lg border border-border-color max-h-[420px]">
+                        <table className="min-w-full text-xs">
+                          <thead className="bg-bg-secondary/70 text-text-muted sticky top-0 z-10">
+                            <tr>
+                              {rowColumns.map((column) => (
+                                <th key={column} className="px-3 py-2 text-left font-semibold whitespace-nowrap">
+                                  {column}
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {rows.length === 0 ? (
+                              <tr>
+                                <td
+                                  colSpan={rowColumns.length}
+                                  className="px-3 py-6 text-center text-sm text-text-muted"
+                                >
+                                  No rows found on this page.
+                                </td>
+                              </tr>
+                            ) : (
+                              rows.map((row, index) => (
+                                <tr key={`${rowsPage}-${index}`} className="border-t border-border-color">
+                                  {rowColumns.map((column) => {
+                                    const value = row[column];
+                                    return (
+                                      <td
+                                        key={`${rowsPage}-${index}-${column}`}
+                                        className="px-3 py-2 font-mono text-text-secondary whitespace-nowrap"
+                                      >
+                                        {value === null ? (
+                                          <span className="text-accent-orange">NULL</span>
+                                        ) : (
+                                          value
+                                        )}
+                                      </td>
+                                    );
+                                  })}
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    <div className="flex items-center justify-between">
+                      <button
+                        onClick={() => void loadPage(rowsPage - 1)}
+                        disabled={loadingRows || rowsPage <= 1}
+                        className="rounded-md border border-border-color px-3 py-1.5 text-xs text-text-secondary hover:text-text-primary hover:bg-white/5 transition-all disabled:opacity-50"
+                      >
+                        Previous
+                      </button>
+                      <span className="text-xs text-text-muted">
+                        Page {rowsPage}
+                      </span>
+                      <button
+                        onClick={() => void loadPage(rowsPage + 1)}
+                        disabled={loadingRows || !rowsHasMore}
+                        className="rounded-md border border-border-color px-3 py-1.5 text-xs text-text-secondary hover:text-text-primary hover:bg-white/5 transition-all disabled:opacity-50"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </section>
+                </>
+              )}
+            </>
           ) : (
             <>
-              <section className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-xs font-semibold uppercase tracking-wider text-text-muted">
-                    Schema ({schemaColumns.length} columns)
-                  </h3>
-                  {loadingSchema && <Loader2 size={14} className="animate-spin text-accent-blue" />}
+              <div className="flex items-center gap-2">
+                <TerminalSquare size={18} className="text-accent-blue" />
+                <div>
+                  <h2 className="text-sm font-semibold text-text-primary">SQL Console</h2>
+                  <p className="text-xs text-text-muted">
+                    Allowed read queries: SELECT, SHOW, DESCRIBE, EXPLAIN. Write queries require confirmation.
+                  </p>
                 </div>
+              </div>
 
-                {schemaColumns.length === 0 && !loadingSchema ? (
-                  <div className="rounded-lg border border-dashed border-border-color p-5 text-center">
-                    <p className="text-sm text-text-muted">No schema data available.</p>
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto rounded-lg border border-border-color">
-                    <table className="min-w-full text-xs">
-                      <thead className="bg-bg-secondary/70 text-text-muted">
-                        <tr>
-                          <th className="px-3 py-2 text-left font-semibold">Field</th>
-                          <th className="px-3 py-2 text-left font-semibold">Type</th>
-                          <th className="px-3 py-2 text-left font-semibold">Null</th>
-                          <th className="px-3 py-2 text-left font-semibold">Key</th>
-                          <th className="px-3 py-2 text-left font-semibold">Default</th>
-                          <th className="px-3 py-2 text-left font-semibold">Extra</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {schemaColumns.map((column) => (
-                          <tr key={column.field} className="border-t border-border-color">
-                            <td className="px-3 py-2 font-mono text-text-primary">{column.field}</td>
-                            <td className="px-3 py-2 font-mono text-text-secondary">{column.type}</td>
-                            <td className="px-3 py-2 text-text-secondary">
-                              {column.nullable ? 'YES' : 'NO'}
-                            </td>
-                            <td className="px-3 py-2 text-text-secondary">{column.key || '-'}</td>
-                            <td className="px-3 py-2 text-text-secondary">
-                              {column.defaultValue === null ? 'NULL' : column.defaultValue || '-'}
-                            </td>
-                            <td className="px-3 py-2 text-text-secondary">{column.extra || '-'}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </section>
-
-              <section className="space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <h3 className="text-xs font-semibold uppercase tracking-wider text-text-muted">
-                    Rows ({rows.length} on page {rowsPage})
-                  </h3>
-
-                  <div className="flex items-center gap-2">
-                    <label htmlFor="rows-limit" className="text-xs text-text-muted">
-                      Rows per page
-                    </label>
-                    <select
-                      id="rows-limit"
-                      value={rowsLimit}
-                      onChange={(event) => void handleLimitChange(event)}
-                      disabled={loadingRows}
-                      className="rounded-md border border-border-color bg-bg-secondary px-2.5 py-1.5 text-xs text-text-primary outline-none"
-                    >
-                      {ROWS_LIMIT_OPTIONS.map((value) => (
-                        <option key={value} value={value}>
-                          {value}
+              <div className="grid grid-cols-1 lg:grid-cols-5 gap-3">
+                <div className="lg:col-span-2">
+                  <label
+                    htmlFor="sql-console-db"
+                    className="text-xs font-semibold uppercase tracking-wider text-text-muted"
+                  >
+                    Database
+                  </label>
+                  <select
+                    id="sql-console-db"
+                    value={sqlDatabase}
+                    onChange={(event) => setSqlDatabase(event.target.value)}
+                    className="mt-1 w-full rounded-lg border border-border-color bg-bg-secondary px-3 py-2.5 text-sm text-text-primary outline-none transition-all focus:border-accent-blue/50"
+                    disabled={databases.length === 0 || runningQuery}
+                  >
+                    {databases.length === 0 ? (
+                      <option value="">No databases available</option>
+                    ) : (
+                      databases.map((databaseName) => (
+                        <option key={databaseName} value={databaseName}>
+                          {databaseName}
                         </option>
-                      ))}
-                    </select>
-                  </div>
+                      ))
+                    )}
+                  </select>
                 </div>
 
-                {loadingRows ? (
-                  <div className="flex items-center justify-center py-12">
-                    <Loader2 size={22} className="animate-spin text-accent-blue" />
-                    <span className="ml-3 text-sm text-text-muted">Loading rows...</span>
+                <div className="lg:col-span-3 flex items-end justify-end gap-2">
+                  <button
+                    onClick={clearSqlQueryState}
+                    disabled={runningQuery && !queryResult && !queryError}
+                    className="rounded-md border border-border-color px-3 py-2 text-xs text-text-secondary hover:text-text-primary hover:bg-white/5 transition-all disabled:opacity-50"
+                  >
+                    Clear Result
+                  </button>
+                  <button
+                    onClick={() => void runSqlQuery()}
+                    disabled={runningQuery || databases.length === 0}
+                    className={cn(
+                      'flex items-center justify-center gap-2 rounded-lg border px-4 py-2 text-sm font-semibold transition-all',
+                      'bg-accent-blue/15 text-accent-blue border-accent-blue/30 hover:bg-accent-blue/25',
+                      'disabled:opacity-60 disabled:cursor-not-allowed'
+                    )}
+                  >
+                    {runningQuery ? (
+                      <>
+                        <Loader2 size={14} className="animate-spin" />
+                        Running...
+                      </>
+                    ) : (
+                      <>
+                        <Play size={14} />
+                        Run Query
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label
+                  htmlFor="sql-console-input"
+                  className="text-xs font-semibold uppercase tracking-wider text-text-muted"
+                >
+                  SQL Editor
+                </label>
+                <textarea
+                  id="sql-console-input"
+                  value={sqlInput}
+                  onChange={(event) => setSqlInput(event.target.value)}
+                  className="mt-1 w-full min-h-[180px] rounded-lg border border-border-color bg-bg-secondary px-3 py-2.5 text-sm font-mono text-text-primary outline-none transition-all focus:border-accent-blue/50 resize-y"
+                  placeholder="SELECT * FROM users LIMIT 100"
+                  spellCheck={false}
+                />
+              </div>
+
+              {queryError && (
+                <div className="rounded-lg border border-status-stopped/35 bg-status-stopped/10 px-3 py-2 text-xs text-status-stopped">
+                  {queryError}
+                </div>
+              )}
+
+              {!queryResult ? (
+                !queryError && (
+                  <div className="rounded-lg border border-dashed border-border-color p-8 text-center">
+                    <p className="text-sm text-text-muted">Run a query to view results.</p>
                   </div>
-                ) : rowColumns.length === 0 ? (
-                  <div className="rounded-lg border border-dashed border-border-color p-6 text-center">
-                    <p className="text-sm text-text-muted">No row data available.</p>
+                )
+              ) : (
+                <section className="space-y-3">
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <span className="px-2 py-0.5 rounded border border-accent-blue/30 bg-accent-blue/15 text-accent-blue font-semibold uppercase tracking-wider">
+                      {queryResult.queryType}
+                    </span>
+                    {queryResult.affectedRows !== null ? (
+                      <span className="text-text-muted">
+                        Affected rows: <span className="text-text-primary">{queryResult.affectedRows}</span>
+                      </span>
+                    ) : (
+                      <span className="text-text-muted">
+                        Rows: <span className="text-text-primary">{queryResult.rowCount}</span>
+                      </span>
+                    )}
+                    {queryResult.truncated && (
+                      <span className="text-accent-orange">
+                        Result was truncated to 500 rows.
+                      </span>
+                    )}
                   </div>
-                ) : (
-                  <div className="overflow-auto rounded-lg border border-border-color max-h-[420px]">
-                    <table className="min-w-full text-xs">
-                      <thead className="bg-bg-secondary/70 text-text-muted sticky top-0 z-10">
-                        <tr>
-                          {rowColumns.map((column) => (
-                            <th key={column} className="px-3 py-2 text-left font-semibold whitespace-nowrap">
-                              {column}
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {rows.length === 0 ? (
+
+                  {queryResult.columns.length > 0 ? (
+                    <div className="overflow-auto rounded-lg border border-border-color max-h-[420px]">
+                      <table className="min-w-full text-xs">
+                        <thead className="bg-bg-secondary/70 text-text-muted sticky top-0 z-10">
                           <tr>
-                            <td
-                              colSpan={rowColumns.length}
-                              className="px-3 py-6 text-center text-sm text-text-muted"
-                            >
-                              No rows found on this page.
-                            </td>
+                            {queryResult.columns.map((column) => (
+                              <th key={column} className="px-3 py-2 text-left font-semibold whitespace-nowrap">
+                                {column}
+                              </th>
+                            ))}
                           </tr>
-                        ) : (
-                          rows.map((row, index) => (
-                            <tr key={`${rowsPage}-${index}`} className="border-t border-border-color">
-                              {rowColumns.map((column) => {
-                                const value = row[column];
-                                return (
-                                  <td
-                                    key={`${rowsPage}-${index}-${column}`}
-                                    className="px-3 py-2 font-mono text-text-secondary whitespace-nowrap"
-                                  >
-                                    {value === null ? (
-                                      <span className="text-accent-orange">NULL</span>
-                                    ) : (
-                                      value
-                                    )}
-                                  </td>
-                                );
-                              })}
+                        </thead>
+                        <tbody>
+                          {queryResult.rows.length === 0 ? (
+                            <tr>
+                              <td
+                                colSpan={queryResult.columns.length}
+                                className="px-3 py-6 text-center text-sm text-text-muted"
+                              >
+                                Query returned no rows.
+                              </td>
                             </tr>
-                          ))
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-
-                <div className="flex items-center justify-between">
-                  <button
-                    onClick={() => void loadPage(rowsPage - 1)}
-                    disabled={loadingRows || rowsPage <= 1}
-                    className="rounded-md border border-border-color px-3 py-1.5 text-xs text-text-secondary hover:text-text-primary hover:bg-white/5 transition-all disabled:opacity-50"
-                  >
-                    Previous
-                  </button>
-                  <span className="text-xs text-text-muted">
-                    Page {rowsPage}
-                  </span>
-                  <button
-                    onClick={() => void loadPage(rowsPage + 1)}
-                    disabled={loadingRows || !rowsHasMore}
-                    className="rounded-md border border-border-color px-3 py-1.5 text-xs text-text-secondary hover:text-text-primary hover:bg-white/5 transition-all disabled:opacity-50"
-                  >
-                    Next
-                  </button>
-                </div>
-              </section>
+                          ) : (
+                            queryResult.rows.map((row, index) => (
+                              <tr key={`query-row-${index}`} className="border-t border-border-color">
+                                {queryResult.columns.map((column) => {
+                                  const value = row[column];
+                                  return (
+                                    <td
+                                      key={`query-row-${index}-${column}`}
+                                      className="px-3 py-2 font-mono text-text-secondary whitespace-nowrap"
+                                    >
+                                      {value === null ? (
+                                        <span className="text-accent-orange">NULL</span>
+                                      ) : (
+                                        value
+                                      )}
+                                    </td>
+                                  );
+                                })}
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="rounded-lg border border-dashed border-border-color p-6 text-center">
+                      <p className="text-sm text-text-muted">{queryResult.message}</p>
+                    </div>
+                  )}
+                </section>
+              )}
             </>
           )}
         </div>

@@ -7,6 +7,7 @@ import type { DomainInput, DomainOperationResult, DomainRecord } from './domain.
 import type {
   DatabaseListResult,
   DatabaseOperationResult,
+  DatabaseQueryResult,
   DatabaseTableListResult,
   DatabaseTableRowsResult,
   DatabaseTableSchemaResult,
@@ -194,6 +195,13 @@ export interface ElectronAPI {
     page: number,
     limit: number
   ) => Promise<DatabaseTableRowsResult>;
+
+  /** Execute a SQL console query against the selected database */
+  dbQuery: (
+    databaseName: string,
+    sql: string,
+    allowWrite?: boolean
+  ) => Promise<DatabaseQueryResult>;
 }
 
 /**

@@ -330,6 +330,10 @@ function registerIpcHandlers(): void {
     return databaseService.getTableRows(databaseName, tableName, page, limit);
   });
 
+  ipcMain.handle('db:query', async (_event, databaseName: string, sql: string, allowWrite?: boolean) => {
+    return databaseService.executeQuery(databaseName, sql, !!allowWrite);
+  });
+
   // Application
   ipcMain.handle('app:exit', async () => {
     if (!mainWindow) return;

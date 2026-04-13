@@ -63,3 +63,28 @@ export interface DatabaseTableRowsResult {
   rows: DatabaseTableRow[];
   error?: string;
 }
+
+export type DatabaseQueryType =
+  | 'select'
+  | 'show'
+  | 'describe'
+  | 'explain'
+  | 'insert'
+  | 'update'
+  | 'delete'
+  | 'unknown';
+
+/** Result payload for SQL query console execution. */
+export interface DatabaseQueryResult {
+  success: boolean;
+  message: string;
+  database: string;
+  sql: string;
+  queryType: DatabaseQueryType;
+  columns: string[];
+  rows: DatabaseTableRow[];
+  rowCount: number;
+  affectedRows: number | null;
+  truncated: boolean;
+  error?: string;
+}

@@ -16,6 +16,8 @@ import type { ServiceState } from '../../src/types';
 import type {
   DatabaseListResult,
   DatabaseOperationResult,
+  DatabaseQueryResult,
+  DatabaseQueryType,
   DatabaseTableListResult,
   DatabaseTableRow,
   DatabaseTableRowsResult,
@@ -38,10 +40,17 @@ interface CommandResult {
 const MYSQL_EXEC_TIMEOUT_MS = 30000;
 const MYSQL_IMPORT_TIMEOUT_MS = 180000;
 const MYSQL_DUMP_TIMEOUT_MS = 180000;
+const MYSQL_QUERY_TIMEOUT_MS = 30000;
 const MYSQL_IDENTIFIER_PATTERN = /^[A-Za-z0-9_]+$/;
 const TABLE_BROWSE_MAX_LIMIT = 200;
 const TABLE_BROWSE_DEFAULT_LIMIT = 50;
+const QUERY_RESULT_MAX_ROWS = 500;
+const EXEC_MAX_BUFFER_BYTES = 10 * 1024 * 1024;
+const QUERY_MAX_BUFFER_BYTES = 25 * 1024 * 1024;
+const SQL_QUERY_MAX_LENGTH = 50000;
 const SYSTEM_DATABASES = new Set(['information_schema', 'mysql', 'performance_schema', 'sys']);
+const READ_QUERY_TYPES = new Set<DatabaseQueryType>(['select', 'show', 'describe', 'explain']);
+const WRITE_QUERY_TYPES = new Set<DatabaseQueryType>(['insert', 'update', 'delete']);
 
 export class DatabaseService {
   private processBridge: DatabaseProcessBridge;
@@ -287,6 +296,105 @@ export class DatabaseService {
         hasMore: false,
         columns: [],
         rows: [],
+      };
+    }
+  }
+
+  async executeQuery(
+    databaseRaw: string,
+    sqlRaw: string,
+    allowWriteRaw: boolean = false
+  ): Promise<DatabaseQueryResult> {
+    const fallbackDatabase = databaseRaw.trim();
+    const fallbackSql = typeof sqlRaw === 'string' ? sqlRaw : '';
+
+    try {
+      this.ensureMysqlRunning();
+      const databaseName = this.validateDatabaseName(databaseRaw, { allowSystem: true });
+      const sql = this.normalizeSqlStatement(sqlRaw);
+      const queryType = this.getQueryType(sql);
+
+      this.assertSafeQuery(sql);
+      this.assertQueryTypeSupported(queryType, allowWriteRaw);
+
+      const mysqlPath = this.resolveMysqlToolPath('mysql.exe');
+      if (!mysqlPath) {
+        throw new Error('MySQL client (mysql.exe) not found');
+      }
+      assertExecutable(mysqlPath, 'MySQL client');
+
+      if (WRITE_QUERY_TYPES.has(queryType)) {
+        const writeSql = `${sql}; SELECT ROW_COUNT() AS affected_rows`;
+        const { stdout } = await this.execFileCommand(
+          mysqlPath,
+          [...this.buildMysqlConnectionArgs(), '--batch', '--execute', writeSql, databaseName],
+          MYSQL_QUERY_TIMEOUT_MS,
+          QUERY_MAX_BUFFER_BYTES
+        );
+
+        const { columns, rows } = this.parseTabularResult(stdout);
+        const affectedRows = this.parseAffectedRows(columns, rows);
+
+        this.log('success', `Executed ${queryType.toUpperCase()} query on ${databaseName}`);
+        return {
+          success: true,
+          message: `Query executed successfully (${affectedRows} rows affected)`,
+          database: databaseName,
+          sql,
+          queryType,
+          columns: [],
+          rows: [],
+          rowCount: 0,
+          affectedRows,
+          truncated: false,
+        };
+      }
+
+      const executableReadSql = this.buildReadQuerySql(sql, queryType);
+      const { stdout } = await this.execFileCommand(
+        mysqlPath,
+        [...this.buildMysqlConnectionArgs(), '--batch', '--execute', executableReadSql, databaseName],
+        MYSQL_QUERY_TIMEOUT_MS,
+        QUERY_MAX_BUFFER_BYTES
+      );
+
+      const parsed = this.parseTabularResult(stdout);
+      const hasOverflow = parsed.rows.length > QUERY_RESULT_MAX_ROWS;
+      const rows = hasOverflow ? parsed.rows.slice(0, QUERY_RESULT_MAX_ROWS) : parsed.rows;
+
+      this.log(
+        'system',
+        `Executed ${queryType.toUpperCase()} query on ${databaseName} (${rows.length} rows${hasOverflow ? ', truncated' : ''})`
+      );
+      return {
+        success: true,
+        message: hasOverflow
+          ? `Query succeeded. Showing first ${QUERY_RESULT_MAX_ROWS} rows.`
+          : 'Query succeeded.',
+        database: databaseName,
+        sql,
+        queryType,
+        columns: parsed.columns,
+        rows,
+        rowCount: rows.length,
+        affectedRows: null,
+        truncated: hasOverflow,
+      };
+    } catch (error) {
+      const message = this.getErrorMessage(error);
+      this.log('error', `Failed to execute query: ${message}`);
+      return {
+        success: false,
+        message: 'Failed to execute SQL query',
+        error: message,
+        database: fallbackDatabase,
+        sql: fallbackSql,
+        queryType: 'unknown',
+        columns: [],
+        rows: [],
+        rowCount: 0,
+        affectedRows: null,
+        truncated: false,
       };
     }
   }
@@ -560,6 +668,112 @@ export class DatabaseService {
     return row;
   }
 
+  private normalizeSqlStatement(sqlRaw: string): string {
+    const trimmed = sqlRaw.trim();
+    if (!trimmed) {
+      throw new Error('SQL query is required');
+    }
+
+    if (trimmed.length > SQL_QUERY_MAX_LENGTH) {
+      throw new Error(`SQL query is too long (max ${SQL_QUERY_MAX_LENGTH} characters)`);
+    }
+
+    const withoutTrailingSemicolon = trimmed.replace(/;+\s*$/, '').trim();
+    if (!withoutTrailingSemicolon) {
+      throw new Error('SQL query is required');
+    }
+
+    if (withoutTrailingSemicolon.includes(';')) {
+      throw new Error('Only a single SQL statement is allowed');
+    }
+
+    return withoutTrailingSemicolon;
+  }
+
+  private getQueryType(sql: string): DatabaseQueryType {
+    const keywordMatch = sql.match(/^([A-Za-z]+)/);
+    if (!keywordMatch) {
+      return 'unknown';
+    }
+
+    const keyword = keywordMatch[1].toLowerCase();
+    if (keyword === 'select') return 'select';
+    if (keyword === 'show') return 'show';
+    if (keyword === 'describe' || keyword === 'desc') return 'describe';
+    if (keyword === 'explain') return 'explain';
+    if (keyword === 'insert') return 'insert';
+    if (keyword === 'update') return 'update';
+    if (keyword === 'delete') return 'delete';
+    return 'unknown';
+  }
+
+  private assertSafeQuery(sql: string): void {
+    const normalized = sql.toUpperCase();
+    if (/\bDROP\s+DATABASE\b/.test(normalized)) {
+      throw new Error('DROP DATABASE is blocked in SQL Console');
+    }
+    if (/\bDROP\s+TABLE\b/.test(normalized)) {
+      throw new Error('DROP TABLE is blocked in SQL Console');
+    }
+    if (/\bTRUNCATE\b/.test(normalized)) {
+      throw new Error('TRUNCATE is blocked in SQL Console');
+    }
+  }
+
+  private assertQueryTypeSupported(queryType: DatabaseQueryType, allowWrite: boolean): void {
+    if (READ_QUERY_TYPES.has(queryType)) {
+      return;
+    }
+
+    if (WRITE_QUERY_TYPES.has(queryType)) {
+      if (!allowWrite) {
+        throw new Error('Write query requires explicit confirmation (INSERT/UPDATE/DELETE)');
+      }
+      return;
+    }
+
+    throw new Error(
+      'Only SELECT, SHOW, DESCRIBE, EXPLAIN, and confirmed INSERT/UPDATE/DELETE are allowed'
+    );
+  }
+
+  private buildReadQuerySql(sql: string, queryType: DatabaseQueryType): string {
+    if (queryType === 'select') {
+      return `SELECT * FROM (${sql}) AS __devstack_query LIMIT ${QUERY_RESULT_MAX_ROWS + 1}`;
+    }
+    return sql;
+  }
+
+  private parseTabularResult(stdout: string): { columns: string[]; rows: DatabaseTableRow[] } {
+    const lines = this.parseMysqlBatchLines(stdout);
+    if (lines.length === 0) {
+      return { columns: [], rows: [] };
+    }
+
+    const columns = lines[0].split('\t');
+    if (columns.length === 1 && columns[0] === '') {
+      return { columns: [], rows: [] };
+    }
+
+    const rows = lines.slice(1).map((line) => this.parseTableRow(line, columns));
+    return { columns, rows };
+  }
+
+  private parseAffectedRows(columns: string[], rows: DatabaseTableRow[]): number {
+    if (columns.length === 0 || rows.length === 0) {
+      return 0;
+    }
+
+    const column = columns[0];
+    const rawValue = rows[0][column];
+    if (rawValue === null) {
+      return 0;
+    }
+
+    const parsed = Number(rawValue);
+    return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 0;
+  }
+
   private validateSqlFilePath(sqlFilePath: string): string {
     const resolvedPath = path.resolve(sqlFilePath);
     if (!fs.existsSync(resolvedPath)) {
@@ -600,21 +814,27 @@ export class DatabaseService {
   private async execFileCommand(
     command: string,
     args: string[],
-    timeoutMs: number
+    timeoutMs: number,
+    maxBufferBytes: number = EXEC_MAX_BUFFER_BYTES
   ): Promise<CommandResult> {
     return new Promise<CommandResult>((resolve, reject) => {
-      execFile(command, args, { windowsHide: true, timeout: timeoutMs }, (error, stdout, stderr) => {
-        if (error) {
-          const detail = stderr?.trim() || error.message;
-          reject(new Error(detail));
-          return;
-        }
+      execFile(
+        command,
+        args,
+        { windowsHide: true, timeout: timeoutMs, maxBuffer: maxBufferBytes },
+        (error, stdout, stderr) => {
+          if (error) {
+            const detail = stderr?.trim() || error.message;
+            reject(new Error(detail));
+            return;
+          }
 
-        resolve({
-          stdout: stdout.toString(),
-          stderr: stderr.toString(),
-        });
-      });
+          resolve({
+            stdout: stdout.toString(),
+            stderr: stderr.toString(),
+          });
+        }
+      );
     });
   }
 

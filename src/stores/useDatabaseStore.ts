@@ -8,6 +8,7 @@ import { create } from 'zustand';
 import type {
   DatabaseListResult,
   DatabaseOperationResult,
+  DatabaseQueryResult,
   DatabaseTableListResult,
   DatabaseTableRow,
   DatabaseTableRowsResult,
@@ -36,7 +37,10 @@ interface DatabaseStore {
   loadingTables: boolean;
   loadingSchema: boolean;
   loadingRows: boolean;
+  runningQuery: boolean;
   browserError: string | null;
+  queryResult: DatabaseQueryResult | null;
+  queryError: string | null;
 
   fetchDatabases: () => Promise<DatabaseListResult>;
   selectDatabase: (name: string | null) => void;
@@ -49,6 +53,12 @@ interface DatabaseStore {
     page: number,
     limit: number
   ) => Promise<DatabaseTableRowsResult>;
+  executeSqlQuery: (
+    databaseName: string,
+    sql: string,
+    allowWrite?: boolean
+  ) => Promise<DatabaseQueryResult>;
+  clearSqlQueryState: () => void;
   createDatabase: (name: string) => Promise<DatabaseOperationResult>;
   deleteDatabase: (name: string) => Promise<DatabaseOperationResult>;
   importDatabase: (databaseName: string, filePath?: string) => Promise<DatabaseOperationResult>;
@@ -86,7 +96,10 @@ export const useDatabaseStore = create<DatabaseStore>((set, get) => ({
   loadingTables: false,
   loadingSchema: false,
   loadingRows: false,
+  runningQuery: false,
   browserError: null,
+  queryResult: null,
+  queryError: null,
 
   fetchDatabases: async () => {
     set({ loadingDatabases: true });
@@ -110,6 +123,8 @@ export const useDatabaseStore = create<DatabaseStore>((set, get) => ({
           rowsPage: 1,
           rowsHasMore: false,
           browserError: unavailable.message,
+          queryResult: null,
+          queryError: null,
         });
         return unavailable;
       }
@@ -128,6 +143,8 @@ export const useDatabaseStore = create<DatabaseStore>((set, get) => ({
           rowsPage: 1,
           rowsHasMore: false,
           browserError: result.error ?? result.message,
+          queryResult: null,
+          queryError: null,
         });
         return result;
       }
@@ -175,6 +192,8 @@ export const useDatabaseStore = create<DatabaseStore>((set, get) => ({
         rowsPage: 1,
         rowsHasMore: false,
         browserError: message,
+        queryResult: null,
+        queryError: null,
       });
       return {
         success: false,
@@ -470,6 +489,112 @@ export const useDatabaseStore = create<DatabaseStore>((set, get) => ({
       });
       return failed;
     }
+  },
+
+  executeSqlQuery: async (databaseName, sql, allowWrite = false) => {
+    const normalizedDatabaseName = databaseName.trim();
+    const normalizedSql = sql.trim();
+    if (!normalizedDatabaseName) {
+      const invalid: DatabaseQueryResult = {
+        success: false,
+        message: 'Database name is required',
+        error: 'INVALID_DATABASE',
+        database: databaseName,
+        sql,
+        queryType: 'unknown',
+        columns: [],
+        rows: [],
+        rowCount: 0,
+        affectedRows: null,
+        truncated: false,
+      };
+      set({ queryResult: null, queryError: invalid.message });
+      return invalid;
+    }
+
+    if (!normalizedSql) {
+      const invalid: DatabaseQueryResult = {
+        success: false,
+        message: 'SQL query is required',
+        error: 'EMPTY_QUERY',
+        database: normalizedDatabaseName,
+        sql,
+        queryType: 'unknown',
+        columns: [],
+        rows: [],
+        rowCount: 0,
+        affectedRows: null,
+        truncated: false,
+      };
+      set({ queryResult: null, queryError: invalid.message });
+      return invalid;
+    }
+
+    if (!window.electronAPI?.dbQuery) {
+      const unavailable: DatabaseQueryResult = {
+        success: false,
+        message: 'Database query console is unavailable outside Electron mode',
+        error: 'IPC_UNAVAILABLE',
+        database: normalizedDatabaseName,
+        sql,
+        queryType: 'unknown',
+        columns: [],
+        rows: [],
+        rowCount: 0,
+        affectedRows: null,
+        truncated: false,
+      };
+      set({ queryResult: null, queryError: unavailable.message });
+      return unavailable;
+    }
+
+    set({ runningQuery: true, queryError: null });
+    try {
+      const result = await window.electronAPI.dbQuery(normalizedDatabaseName, sql, allowWrite);
+      if (!result.success) {
+        set({
+          runningQuery: false,
+          queryResult: null,
+          queryError: result.error ?? result.message,
+        });
+        return result;
+      }
+
+      set({
+        runningQuery: false,
+        queryResult: result,
+        queryError: null,
+      });
+      return result;
+    } catch (error) {
+      const message = getErrorMessage(error);
+      const failed: DatabaseQueryResult = {
+        success: false,
+        message: 'Failed to execute SQL query',
+        error: message,
+        database: normalizedDatabaseName,
+        sql,
+        queryType: 'unknown',
+        columns: [],
+        rows: [],
+        rowCount: 0,
+        affectedRows: null,
+        truncated: false,
+      };
+      set({
+        runningQuery: false,
+        queryResult: null,
+        queryError: message,
+      });
+      return failed;
+    }
+  },
+
+  clearSqlQueryState: () => {
+    set({
+      queryResult: null,
+      queryError: null,
+    });
   },
 
   createDatabase: async (name: string) => {

@@ -1,0 +1,17 @@
+[
+  {
+    "name": "Select query passes",
+    "success": true,
+    "details": "Returned 3 rows"
+  },
+  {
+    "name": "Invalid SQL fails cleanly",
+    "success": true,
+    "details": "Only SELECT, SHOW, DESCRIBE, EXPLAIN, and confirmed INSERT/UPDATE/DELETE are allowed"
+  },
+  {
+    "name": "Dangerous query is blocked",
+    "success": true,
+    "details": "DROP TABLE is blocked in SQL Console"
+  }
+]
