@@ -2,6 +2,256 @@
 
 Date: 2026-04-14
 
+## Session 2026-04-14 - Clean Windows Gate Closure Request Blocked By Session Environment
+
+**Completed:**
+- Re-read `SESSION_HANDOFF.md`, `PROJECT_CONTEXT.md`, and `PHASE5_1_8_REPORT.md`.
+- Verified the active session environment against the requested clean-environment prerequisites.
+- Confirmed this session does **not** match the required validation environment:
+  - current repo path is `C:\\Users\\Wyatt\\Desktop\\devstack-local`
+  - current PATH Node runtime is `v25.8.2`
+  - this session cannot provision a different Windows machine, move the repo to `C:\\dev\\...`, or apply Windows Security / AV exclusions
+- Did not rerun the four build/package gates in this session under the wrong environment because that would not satisfy the user-requested validation target.
+
+**Decisions Made:**
+- Kept Phase 5.2 blocked.
+- Did not make repo-side build/config changes because the user specifically requested validation on a different clean Windows setup, and this session cannot provide that environment.
+
+**Next Steps:**
+- Run the required four commands on a clean Windows setup that matches all requested prerequisites:
+  - Node 22 LTS in PATH
+  - short writable repo path such as `C:\\dev\\devstack-local`
+  - no Desktop / OneDrive path
+  - AV exclusions for `node.exe`, `npm.cmd`, `npx.cmd`, `esbuild.exe`, `electron.exe`, and `app-builder.exe`
+- If those four gates pass there, create `PHASE5_1_9_REPORT.md`, update `SESSION_HANDOFF.md`, and mark Phase 5.2 safe to start.
+
+**Blockers:**
+- The current session is not the requested clean Windows validation environment.
+- The current session cannot switch itself to a different machine/path/security policy.
+
+## Session 2026-04-14 - Phase 5.1.9 Final Gate Validation Attempt
+
+**Completed:**
+- Re-read `SESSION_HANDOFF.md`, `PHASE5_1_8_REPORT.md`, and `PROJECT_CONTEXT.md` before continuing.
+- Re-ran the required commands exactly from the repo root:
+  - `npm run build`: FAIL
+  - `npm run verify`: FAIL
+  - `npm run smoke:packaged`: FAIL
+  - `npx electron-builder -- --win nsis --publish never --config.win.signAndEditExecutable=false`: FAIL
+- Re-confirmed current output state in this shell:
+  - `dist-electron/main.js`: missing
+  - `dist-electron/preload.js`: missing
+  - `release/win-unpacked/DevStack Local.exe`: missing
+
+**Decisions Made:**
+- Did not make another repo-side build/config patch because the remaining blocker is still environment-level Node child-process spawning, not an unresolved Electron bundling/config issue.
+- Kept Phase 5.2 blocked because the required four gates are still not green.
+
+**Next Steps:**
+- Re-run the same four commands on a truly clean Windows environment where Node is permitted to spawn child processes.
+- Confirm there that:
+  - `dist-electron/main.js` exists
+  - `dist-electron/preload.js` exists
+  - the packaged app launches and exits cleanly
+- Only after those gates pass should Phase 5.2 be marked safe to start.
+
+**Blockers:**
+- `npm run build` still fails during nested Electron `vite:esbuild` transform of `electron/main.ts` with `spawn EPERM`.
+- `npm run verify` still fails because it stops at that same build step.
+- `npm run smoke:packaged` still fails at its build step with `spawn EPERM`.
+- Direct `electron-builder` still fails because Node cannot spawn `node_modules\\app-builder-bin\\win\\x64\\app-builder.exe` (`spawn EPERM`).
+
+## Session 2026-04-14 - Phase 5.1.8 Final Electron Externalization Closure
+
+**Completed:**
+- Re-read `SESSION_HANDOFF.md`, `PHASE5_1_7_REPORT.md`, and `PHASE5_1_6_REPORT.md` before continuing.
+- Re-inspected the full Electron build path from `npm run build` through the nested `vite-plugin-electron` `closeBundle` builds for `electron/main.ts` and `electron/preload.ts`.
+- Identified the final repo-side native bundling gap: the Electron external matcher was still checking overly literal module IDs and was not normalizing Vite/Rollup CommonJS-decorated IDs before `.node` and dependency matching.
+- Updated `vite.config.ts` so Electron main/preload builds now:
+  - normalize virtual/query-decorated IDs before external checks
+  - externalize any normalized `.node` path
+  - externalize any resolved `node_modules/...` path
+  - keep explicit externalization for `ssh2-sftp-client`, `ssh2`, `cpu-features`, and runtime dependency bare IDs/subpaths
+- Re-ran the required commands:
+  - `npm run build`: FAIL
+  - `npm run verify`: FAIL
+  - `npm run smoke:packaged`: FAIL
+  - `npx electron-builder -- --win nsis --publish never --config.win.signAndEditExecutable=false`: FAIL
+- Confirmed current output state in this shell:
+  - `dist-electron/main.js`: missing
+  - `dist-electron/preload.js`: missing
+- Updated `PHASE5_1_8_REPORT.md`, `PROJECT_CONTEXT.md`, and `README.md`.
+
+**Decisions Made:**
+- Kept scope strictly inside Electron build/package closure and did not start Phase 5.2 or add features.
+- Fixed the remaining `cpufeatures.node` bundle-entry path in config rather than changing remote-service imports or product behavior.
+- Left the existing Vite JavaScript API build script in place because it is still the correct way to bypass the CLI TypeScript config-loader path.
+
+**Next Steps:**
+- Re-run the same four commands on a clean Windows environment where Node child-process spawning is permitted.
+- Confirm there that the normalized external matcher prevents the `cpufeatures.node` Rollup failure and produces:
+  - `dist-electron/main.js`
+  - `dist-electron/preload.js`
+- Keep Phase 5.2 blocked until all build/package gates are green.
+
+**Blockers:**
+- In this shell, `npm run build` still fails during nested Electron `vite:esbuild` transform of `electron/main.ts` with `spawn EPERM`.
+- Because of that environment-level blocker, `dist-electron/main.js` and `dist-electron/preload.js` are still not produced here.
+- In this shell, `npm run smoke:packaged` still fails at the build step with `spawn EPERM`.
+- In this shell, `electron-builder` still fails launching `app-builder.exe` with `spawn EPERM`.
+
+## Session 2026-04-14 - Phase 5.1.8 Electron Build Closure
+
+**Completed:**
+- Re-read `SESSION_HANDOFF.md`, `PHASE5_1_7_REPORT.md`, and `PHASE5_1_6_REPORT.md` before resuming work.
+- Re-inspected the actual Electron build path end-to-end:
+  - `tsc`
+  - `dist-electron/` cleanup
+  - direct Vite JS API load of `vite.config.ts`
+  - top-level Vite build
+  - `vite-plugin-electron` nested `closeBundle` builds for `electron/main.ts` and `electron/preload.ts`
+- Confirmed the current externalization rule now covers:
+  - `ssh2-sftp-client`
+  - `ssh2`
+  - `cpu-features`
+  - resolved `node_modules/<package>/**` paths
+  - any `.node` native addon path
+- Added top-level `resolve.preserveSymlinks=true` to `vite.config.ts` so the main Vite build no longer uses the Windows safe-realpath shell probe path.
+- Created `PHASE5_1_8_REPORT.md`.
+- Re-ran the required commands:
+  - `npm run build`: FAIL
+  - `npm run verify`: FAIL
+  - `npm run smoke:packaged`: FAIL
+  - `npx electron-builder -- --win nsis --publish never --config.win.signAndEditExecutable=false`: FAIL
+- Confirmed current output state in this shell:
+  - `dist-electron/main.js`: missing
+  - `dist-electron/preload.js`: missing
+
+**Decisions Made:**
+- Kept scope strictly to build-pipeline closure and did not widen into product or Phase 5.2 work.
+- Treated native externalization as repo-side complete after validating matcher coverage for `ssh2`, `cpu-features`, resolved package paths, and `.node` file IDs.
+- Did not add a larger alternate Electron emission pipeline after the remaining failures again reduced to environment-level `spawn EPERM`.
+
+**Next Steps:**
+- Re-run the same four commands on the clean Windows environment where Node child-process spawning is permitted.
+- Confirm there that the current repo state produces:
+  - `dist-electron/main.js`
+  - `dist-electron/preload.js`
+- Keep Phase 5.2 blocked until all required build/package gates are green.
+
+**Blockers:**
+- In this shell, `npm run build` still fails during nested Electron `vite:esbuild` transform of `electron/main.ts` with `spawn EPERM`.
+- Because of that, `dist-electron/main.js` and `dist-electron/preload.js` are still not produced here.
+- In this shell, packaged smoke still fails at the build step with `spawn EPERM`.
+- In this shell, `electron-builder` still fails launching `app-builder.exe` with `spawn EPERM`.
+
+## Session 2026-04-14 - Phase 5.1.7 Final Electron Build Externalization Fix
+
+**Completed:**
+- Re-read `SESSION_HANDOFF.md`, `PHASE5_1_6_REPORT.md`, and `PHASE5_1_4_REPORT.md` before resuming work.
+- Re-inspected `vite.config.ts`, `package.json`, and the Electron build path for Phase 5.1.7.
+- Confirmed the exact repo-side reason `cpufeatures.node` could still enter Rollup after Phase 5.1.6:
+  - the old external rule matched only direct root dependencies on bare IDs/subpaths
+  - it did not match transitive/resolved IDs under `node_modules/ssh2/**`
+  - it did not match transitive/resolved IDs under `node_modules/cpu-features/**`
+  - it did not match `.node` native addon file IDs
+- Updated `vite.config.ts` so Electron main/preload builds externalize:
+  - `ssh2-sftp-client`
+  - `ssh2`
+  - `cpu-features`
+  - resolved `node_modules/<package>/**` IDs
+  - any `.node` native addon path
+- Switched `vite.config.ts` to ESM-safe config path resolution with `fileURLToPath(import.meta.url)`.
+- Updated `package.json` so `npm run build` uses the Vite JavaScript API with `configFile=false`, bypassing the CLI TypeScript config-loader path.
+- Added `resolve.preserveSymlinks=true` to the nested Electron builds to avoid Vite's Windows safe-realpath shell probe during Electron close-bundle resolution.
+- Created `PHASE5_1_7_REPORT.md`.
+- Re-ran the required commands:
+  - `npm run build`: FAIL
+  - `npm run verify`: FAIL
+  - `npm run smoke:packaged`: FAIL
+  - `npx electron-builder -- --win nsis --publish never --config.win.signAndEditExecutable=false`: FAIL
+
+**Decisions Made:**
+- Kept scope strictly to Electron build/config externalization and build-pipeline behavior.
+- Fixed the `cpufeatures.node` gap by broadening the external matcher instead of changing remote-service imports or product logic.
+- Did not add further speculative workarounds after the shell again confirmed environment-level `spawn EPERM` during Electron build/package execution.
+
+**Next Steps:**
+- Re-run the same four commands on the clean Windows environment where the latest local run reached the `cpufeatures.node` Rollup resolution failure.
+- Confirm there that the broadened external rule prevents Rollup from entering `cpu-features` and produces:
+  - `dist-electron/main.js`
+  - `dist-electron/preload.js`
+- Keep Phase 5.2 blocked until all required build/package gates are green.
+
+**Blockers:**
+- In this shell, `npm run build` still fails during Electron `vite:esbuild` transform of `electron/main.ts` with `spawn EPERM`.
+- Because the build does not complete here, `dist-electron/main.js` and `dist-electron/preload.js` are still absent in this session.
+- In this shell, packaged smoke still fails at the build step with `spawn EPERM`.
+- In this shell, `electron-builder` still fails launching `app-builder.exe` with `spawn EPERM`.
+
+## Session 2026-04-14 - Phase 5.1.6 Electron Native Dependency Build Fix
+
+**Completed:**
+- Re-read `SESSION_HANDOFF.md`, `PHASE5_1_4_REPORT.md`, and `PHASE5_1_3_REPORT.md` before resuming work.
+- Traced the Electron dependency chain from `electron/services/remote.service.ts` through `ssh2-sftp-client` and `ssh2` to the optional native `cpu-features` addon.
+- Confirmed the repo-side root cause of the latest clean-environment build failure:
+  - Electron main/preload Rollup config was only externalizing `electron`
+  - runtime dependencies were still being bundled
+  - bundling entered `cpu-features/lib/index.js`
+  - that package requires `../build/Release/cpufeatures.node`
+- Updated `vite.config.ts` so Electron main/preload builds externalize runtime dependencies from `package.json` instead of bundling them.
+- Created `PHASE5_1_6_REPORT.md`.
+- Re-ran the required commands in this shell:
+  - `npm run verify`: FAIL
+  - `npm run smoke:packaged`: FAIL
+  - `npx electron-builder -- --win nsis --publish never --config.win.signAndEditExecutable=false`: FAIL
+
+**Decisions Made:**
+- Kept the change strictly to Electron build configuration; no product logic, UI, or Phase 5.2 work was added.
+- Fixed the native bundling problem by externalizing runtime dependencies at the Electron Rollup boundary instead of modifying `ssh2` usage or adding a native-module plugin.
+- Did not add a speculative workaround for the remaining Windows `spawn EPERM` behavior in this shell.
+
+**Next Steps:**
+- Re-run the same three required commands on the clean Windows environment where the latest local run reached the `cpu-features` bundling error.
+- Confirm there that `dist-electron/main.js` and `dist-electron/preload.js` are produced after the externalization fix.
+- Keep Phase 5.2 blocked until all three commands are green.
+
+**Blockers:**
+- In this shell, Vite config loading still fails with `spawn EPERM` before the fixed Electron bundle path can complete.
+- In this shell, packaged smoke still fails at its build step with `spawn EPERM`.
+- In this shell, `electron-builder` still fails launching `app-builder.exe` with `spawn EPERM`.
+
+## Session 2026-04-14 - Phase 5.1.5 Final Packaging Gate Closure Attempt
+
+**Completed:**
+- Re-read `SESSION_HANDOFF.md` and `PHASE5_1_4_REPORT.md` before resuming work.
+- Ran the required commands exactly from the repo root:
+  - `npm run verify`: FAIL
+  - `npm run smoke:packaged`: FAIL
+  - `npx electron-builder -- --win nsis --publish never --config.win.signAndEditExecutable=false`: FAIL
+- Confirmed `npm run verify` fails first while Vite loads `vite.config.ts` because esbuild child-process startup returns `spawn EPERM`.
+- Confirmed `npm run smoke:packaged` fails at its build step with the same Node child-process `spawn EPERM`.
+- Confirmed direct packaging still fails when `electron-builder` tries to launch `node_modules\\app-builder-bin\\win\\x64\\app-builder.exe`.
+- Confirmed the active shell resolves `npm`/`npx` through Node `v25.8.2`, then re-checked the child-process behavior under the pinned workspace Node `v22.22.2`.
+- Probed child-process creation directly and confirmed both Node `v25.8.2` and Node `v22.22.2` fail with `spawn EPERM` for:
+  - `cmd.exe`
+  - `node_modules\\@esbuild\\win32-x64\\esbuild.exe`
+  - `node_modules\\app-builder-bin\\win\\x64\\app-builder.exe`
+- Confirmed `app-builder.exe --version` runs from PowerShell directly, so the blocker is Node child-process spawning on this Windows environment, not a missing or corrupt binary.
+
+**Decisions Made:**
+- Did not patch the repo with speculative build or packaging workarounds because the verified blocker is broader than Vite or `electron-builder`: Node cannot spawn even `cmd.exe` in this environment.
+- Kept scope to final packaging gate closure only; no Phase 5.2 work, no new features, and no UI changes.
+- Phase 5.2 remains blocked because the required packaging/runtime gates are still not green.
+
+**Next Steps:**
+- Re-run the same three commands on a Windows environment where Node child-process spawning is permitted.
+- Only if the three required commands pass there should `PHASE5_1_5_REPORT.md` be created and Phase 5.2 be started.
+
+**Blockers:**
+- Node child-process creation returns `EPERM` in this environment even for `cmd.exe`.
+- Because of that host-level blocker, `vite` cannot start esbuild, packaged smoke cannot complete, and `electron-builder` cannot launch `app-builder.exe`.
+
 ## Session 2026-04-14 - Phase 5.1.4 Final Gate Confirmation
 
 **Completed:**

@@ -8,7 +8,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && node -e \"require('node:fs').rmSync('dist-electron', { recursive: true, force: true })\" && vite build --mode electron",
+    "build": "tsc && node -e \"require('node:fs').rmSync('dist-electron', { recursive: true, force: true })\" && node --experimental-strip-types -e \"import { build } from 'vite'; import configFactory from './vite.config.ts'; const viteConfig = typeof configFactory === 'function' ? await configFactory({ command: 'build', mode: 'electron', isSsrBuild: false, isPreview: false }) : configFactory; await build({ ...viteConfig, configFile: false, mode: 'electron' });\"",
     "verify": "npm run build && npx tsx scripts/phase2_6_real_tests.ts && npx tsx scripts/phase3_real_tests.ts && npx tsx scripts/phase3_1_hardening_tests.ts && npx tsx scripts/phase4_1_real_tests.ts && npx tsx scripts/phase4_2_real_tests.ts && npx tsx scripts/phase4_3_real_tests.ts && npx tsx scripts/phase4_4_real_tests.ts && npx tsx scripts/phase4_5_release_checks.ts && npx tsx scripts/phase5_1_real_tests.ts",
     "release:checks": "npx tsx scripts/phase4_5_release_checks.ts",
     "preview": "vite preview",

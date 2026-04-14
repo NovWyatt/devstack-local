@@ -2,22 +2,22 @@
   {
     "name": "Apache starts and responds on localhost",
     "success": true,
-    "details": "PID 24096, HTTP probe succeeded on http://localhost:80"
+    "details": "PID 12036, HTTP probe succeeded on http://localhost:80"
   },
   {
     "name": "MySQL starts and accepts TCP connections",
     "success": true,
-    "details": "PID 14248, TCP probe succeeded on 127.0.0.1:3306"
+    "details": "PID 10940, TCP probe succeeded on 127.0.0.1:3306"
   },
   {
     "name": "PHP-CGI starts and listens on runtime port",
     "success": true,
-    "details": "PID 9564, TCP probe succeeded on 127.0.0.1:9803"
+    "details": "PID 9020, TCP probe succeeded on 127.0.0.1:9803"
   },
   {
     "name": "Crash auto-restart enforces max 3 attempts",
     "success": true,
-    "details": "Observed 3 restarts with unique PIDs: 12364, 17660, 9644"
+    "details": "Observed 3 restarts with unique PIDs: 21432, 24332, 13316"
   },
   {
     "name": "Stop services leaves no managed processes running",
