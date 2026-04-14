@@ -111,6 +111,7 @@ npm run smoke:packaged
 
 - Use a local Node LTS toolchain for verification and packaging. Node 22 LTS is the safest baseline for this repo.
 - Packaged builds intentionally disable `electron-builder` native dependency rebuilds (`npmRebuild=false`).
+- `npm run build` now runs `vite build --mode electron`, so the packaging gates rebuild `dist-electron` instead of relying on stale Electron output from older runs.
 - The only native rebuild currently implicated in packaging is the optional chain `ssh2-sftp-client -> ssh2 -> cpu-features@0.0.10`.
 - `cpu-features` is not required for app runtime. `ssh2` wraps that import in a `try/catch` and only uses it for crypto/cipher optimization.
 - If you deliberately force native rebuilds back on, install Python 3 plus Visual Studio Build Tools 2022 with Desktop C++ support for `node-gyp`.

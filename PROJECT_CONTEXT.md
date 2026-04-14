@@ -25,4 +25,7 @@
   - `electron-builder` now skips optional native dependency rebuilds (`npmRebuild=false`), avoiding the unnecessary `ssh2 -> cpu-features@0.0.10` rebuild path
   - Electron main-process packaged path resolution now uses ESM-safe `fileURLToPath(import.meta.url)` instead of raw `__dirname`
   - packaged smoke now clears `release/` before running and stops immediately on the first build/package failure
+- Phase 5.1.3 packaging/runtime fix is implemented in code:
+  - the standard build pipeline now runs Vite in `electron` mode so Electron main/preload are rebuilt for packaging gates
+  - packaged smoke now rejects stale `dist-electron` output that still contains `__dirname` or `__filename`
 - Previous stable phases remain preserved in code, but the required packaging gates still cannot pass on this specific machine because Windows is returning `spawn EPERM` for Vite/esbuild and `app-builder.exe`.

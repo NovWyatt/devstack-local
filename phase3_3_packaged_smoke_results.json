@@ -2,7 +2,7 @@
   {
     "name": "Clean packaged output",
     "success": true,
-    "details": "No stale release/ output found"
+    "details": "Removed stale release/ output before smoke run"
   },
   {
     "name": "Build web/electron bundles",

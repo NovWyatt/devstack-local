@@ -8,7 +8,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "tsc && node -e \"require('node:fs').rmSync('dist-electron', { recursive: true, force: true })\" && vite build --mode electron",
     "verify": "npm run build && npx tsx scripts/phase2_6_real_tests.ts && npx tsx scripts/phase3_real_tests.ts && npx tsx scripts/phase3_1_hardening_tests.ts && npx tsx scripts/phase4_1_real_tests.ts && npx tsx scripts/phase4_2_real_tests.ts && npx tsx scripts/phase4_3_real_tests.ts && npx tsx scripts/phase4_4_real_tests.ts && npx tsx scripts/phase4_5_release_checks.ts && npx tsx scripts/phase5_1_real_tests.ts",
     "release:checks": "npx tsx scripts/phase4_5_release_checks.ts",
     "preview": "vite preview",

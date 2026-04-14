@@ -2,6 +2,65 @@
 
 Date: 2026-04-14
 
+## Session 2026-04-14 - Phase 5.1.4 Final Gate Confirmation
+
+**Completed:**
+- Re-read `SESSION_HANDOFF.md` and `PHASE5_1_3_REPORT.md` before resuming work.
+- Verified the workspace-local Node 22 runtime at `.tools/node-v22.22.2-win-x64/`.
+- Re-ran the required gates through Node 22:
+  - `npm run verify`: FAIL
+  - `npm run smoke:packaged`: FAIL
+  - `npx electron-builder -- --win nsis --publish never --config.win.signAndEditExecutable=false`: FAIL
+- Confirmed `npmRebuild=false` is still honored under Node 22, so `cpu-features` rebuild is not the live blocker.
+- Confirmed smoke remains fail-fast and does not pass stale artifacts.
+- Created `PHASE5_1_4_REPORT.md`.
+
+**Decisions Made:**
+- Kept scope to environment confirmation only; no Phase 5.2 work and no new features.
+- Did not add speculative repo workarounds for a host-level Windows `spawn EPERM` restriction.
+
+**Next Steps:**
+- Re-run the same three commands on a truly clean Windows Node 22 LTS environment where child-process spawning is permitted.
+- Keep Phase 5.2 blocked until all three packaging/runtime gates are green.
+
+**Blockers:**
+- Under Node 22 in this session, Vite/esbuild still fails with `spawn EPERM`.
+- Under Node 22 in this session, `electron-builder` still fails when spawning `app-builder.exe`.
+- Packaged launch/exit cannot be re-confirmed end-to-end here because packaging never completes.
+
+## Session 2026-04-14 - Phase 5.1.3 Final Packaging Gate Fix
+
+**Completed:**
+- Re-read `SESSION_HANDOFF.md` and `PHASE5_1_2_REPORT.md` before resuming work.
+- Re-inspected `package.json`, `electron-builder.json`, `vite.config.ts`, and current `dist-electron` output.
+- Confirmed direct `electron-builder` now loads `electron-builder.json` and honors `npmRebuild=false`.
+- Confirmed the current packaging failure on this machine is no longer a `cpu-features` rebuild; it now fails later at `app-builder.exe` with `spawn EPERM`.
+- Found the real packaged runtime crash root cause: `npm run build` was only running plain `vite build`, so `dist-electron` stayed stale and still contained `__dirname`.
+- Updated the build pipeline so `npm run build` clears `dist-electron` and runs `vite build --mode electron`.
+- Hardened packaged smoke to assert rebuilt Electron bundles exist and contain no `__dirname` / `__filename`.
+- Created `PHASE5_1_3_REPORT.md`.
+- Updated `README.md` and `PROJECT_CONTEXT.md` with the new packaging/build behavior.
+- Re-ran the required gates in this session:
+  - `npm run verify`: FAIL
+  - `npm run smoke:packaged`: FAIL
+  - `npx electron-builder -- --win nsis --publish never --config.win.signAndEditExecutable=false`: FAIL
+
+**Decisions Made:**
+- Kept `npmRebuild=false`; the current effective config already honors it, so no larger `electron-builder` workaround was added.
+- Fixed the packaged runtime crash by correcting the build pipeline, not by changing runtime architecture again.
+- Kept scope limited to packaging/runtime only; no Phase 5.2 work and no product-scope expansion.
+
+**Next Steps:**
+- Re-run `npm run verify` on a Windows environment where Vite/esbuild child-process spawning is permitted.
+- Re-run `npm run smoke:packaged` there to confirm the rebuilt `dist-electron` bundle eliminates the packaged `__dirname` crash.
+- Re-run the explicit NSIS builder command there to confirm packaging completes after the already-effective rebuild suppression.
+- Keep Phase 5.2 blocked until all three gates pass on a non-blocked environment.
+
+**Blockers:**
+- `npm run verify` still fails in this session because Vite/esbuild startup returns `spawn EPERM`.
+- `npm run smoke:packaged` now correctly fails fast at the build step with the same `spawn EPERM`.
+- Direct packaging still fails on this machine because `electron-builder` cannot spawn `app-builder.exe`, even though dependency rebuild is already skipped.
+
 ## Session 2026-04-14 - Phase 5.1.2 Packaged Build + Runtime Unblock
 
 **Completed:**

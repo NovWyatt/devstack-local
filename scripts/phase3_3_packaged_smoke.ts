@@ -53,6 +53,14 @@ function summarizeOutput(output: string): string {
   return lines.slice(-8).join(' | ');
 }
 
+function assertNoCommonJsPathGlobals(filePath: string): void {
+  const source = fs.readFileSync(filePath, 'utf-8');
+  const matches = source.match(/\b__(dirname|filename)\b/g) ?? [];
+  if (matches.length > 0) {
+    throw new Error(`Built Electron bundle still contains CommonJS path globals: ${filePath}`);
+  }
+}
+
 function getNpmCommand(args: string[]): CommandSpec {
   const npmExecPath = process.env.npm_execpath;
   if (npmExecPath) {
@@ -206,10 +214,13 @@ async function main(): Promise<void> {
   const projectRoot = process.cwd();
   const outputPath = path.join(projectRoot, 'phase3_3_packaged_smoke_results.json');
   const releaseDir = path.join(projectRoot, 'release');
+  const electronBuildDir = path.join(projectRoot, 'dist-electron');
   const packagedRoot = path.join(projectRoot, 'release', 'win-unpacked');
   const resourcesDir = path.join(packagedRoot, 'resources');
   const binariesRoot = path.join(resourcesDir, 'binaries');
   const exePath = path.join(packagedRoot, 'DevStack Local.exe');
+  const electronMainPath = path.join(electronBuildDir, 'main.js');
+  const electronPreloadPath = path.join(electronBuildDir, 'preload.js');
 
   try {
     await runRequiredStep('Clean packaged output', async () => {
@@ -227,6 +238,18 @@ async function main(): Promise<void> {
         throw new Error(`npm run build failed (${details})`);
       }
       return 'npm run build completed';
+    });
+
+    await runRequiredStep('Verify built Electron path bundle', async () => {
+      const requiredBuildOutputs = [electronMainPath, electronPreloadPath];
+      for (const requiredPath of requiredBuildOutputs) {
+        assert(fs.existsSync(requiredPath), `Missing built Electron bundle: ${requiredPath}`);
+      }
+
+      assertNoCommonJsPathGlobals(electronMainPath);
+      assertNoCommonJsPathGlobals(electronPreloadPath);
+
+      return 'dist-electron main/preload rebuilt without __dirname or __filename';
     });
 
     await runRequiredStep('Build unpacked Windows package', async () => {
