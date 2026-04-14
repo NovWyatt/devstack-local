@@ -22,6 +22,6 @@
   {
     "name": "first-run writable runtime directories are creatable outside resources",
     "success": true,
-    "details": "Runtime root=C:\\Users\\Wyatt\\AppData\\Local\\Temp\\devstack-phase4-5-runtime-Qj4TkR\\.devstack-runtime"
+    "details": "Runtime root=C:\\Users\\Wyatt\\AppData\\Local\\Temp\\devstack-phase4-5-runtime-G7QYvV\\.devstack-runtime"
   }
 ]
