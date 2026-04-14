@@ -1,27 +1,17 @@
 [
   {
+    "name": "Clean packaged output",
+    "success": true,
+    "details": "No stale release/ output found"
+  },
+  {
     "name": "Build web/electron bundles",
-    "success": true,
-    "details": "npm run build completed"
-  },
-  {
-    "name": "Build unpacked Windows package",
     "success": false,
-    "details": "electron-builder --win --dir failed (    npm error     at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5) |     npm error     at node:internal/main/run_main_module:33:47 |     npm error |     npm error Node.js v25.8.2 |     npm error A complete log of this run can be found in: C:\\Users\\Wyatt\\AppData\\Local\\npm-cache\\_logs\\2026-04-14T01_01_45_005Z-debug-0.log |      |                     command='C:\\Program Files\\nodejs\\node.exe' 'C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js' rebuild cpu-features@0.0.10 |                     workingDir=)"
+    "details": "spawn EPERM"
   },
   {
-    "name": "Verify packaged resources and binaries",
-    "success": true,
-    "details": "Validated app.asar, icon, Apache/MySQL binaries, and PHP CGI (C:\\Users\\Wyatt\\Desktop\\devstack-local\\release\\win-unpacked\\resources\\binaries\\php\\8.3.30\\php-cgi.exe)"
-  },
-  {
-    "name": "Verify packaged path resolution contract",
-    "success": true,
-    "details": "Bundled resources resolve from resources/binaries and mutable paths stay outside packaged resources"
-  },
-  {
-    "name": "Packaged app startup smoke exits cleanly",
+    "name": "Phase 3.3 packaged smoke runner",
     "success": false,
-    "details": "Timed out waiting for packaged app to exit after 5000ms"
+    "details": "spawn EPERM"
   }
 ]

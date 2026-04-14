@@ -12,6 +12,7 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
 import type { OpenDialogOptions } from 'electron';
 import path from 'path';
+import { fileURLToPath } from 'node:url';
 import { ProcessManager } from './services/process.manager';
 import { PhpService } from './services/php.service';
 import { DomainService } from './services/domain.service';
@@ -54,6 +55,8 @@ const remoteService = new RemoteService(processManager, {
 /** Track whether we're already quitting to prevent double-stop */
 let isQuitting = false;
 
+const electronEntryDir = path.dirname(fileURLToPath(import.meta.url));
+
 function sanitizeFilenameSegment(value: string, fallback: string): string {
   const sanitized = value
     .trim()
@@ -79,7 +82,7 @@ function createWindow(): void {
     backgroundColor: '#0a0e1a',
     icon: resolveAppIconPath(),
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(electronEntryDir, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
@@ -103,7 +106,7 @@ function createWindow(): void {
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+    mainWindow.loadFile(path.join(electronEntryDir, '../dist/index.html'));
   }
 
   // Register the window with the process manager for IPC broadcasts

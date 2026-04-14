@@ -14,7 +14,7 @@
     "preview": "vite preview",
     "electron:dev": "vite --mode electron",
     "electron:build": "npm run build && electron-builder",
-    "smoke:packaged": "npx tsx scripts/phase3_3_packaged_smoke.ts"
+    "smoke:packaged": "node --experimental-strip-types scripts/phase3_3_packaged_smoke.ts"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",

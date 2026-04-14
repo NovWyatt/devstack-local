@@ -21,9 +21,8 @@
   - Sensitive remote passwords are isolated from non-sensitive metadata and stored through OS-backed encryption when Electron secure storage is available.
   - No shell access, background sync, auto-upload, tunneling, or Phase 5.2 work has been added.
 - Phase 5.1 service-level tests pass locally via direct Node type-stripping execution.
-- Phase 5.1.1 stabilization investigation is complete:
-  - stale tracked Phase 5 temp/cache artifacts were identified and ignore coverage was added
-  - the current machine blocks Node/Electron child-process creation with `spawn EPERM`
-  - the blocker affects Vite/esbuild, `tsx`, real Apache/MySQL/PHP-CGI start tests, and `electron-builder`
-- Previous stable phases remain preserved in code, but repo-wide `npm run verify` and `npm run smoke:packaged` cannot pass on this specific machine until the Windows Node/Electron child-process `EPERM` issue is resolved.
-- This session also cannot write into `.git`, so tracked temp/cache artifact cleanup and commit operations remain blocked until the repo ACL issue is cleared.
+- Phase 5.1.2 packaging/runtime unblock is implemented in code:
+  - `electron-builder` now skips optional native dependency rebuilds (`npmRebuild=false`), avoiding the unnecessary `ssh2 -> cpu-features@0.0.10` rebuild path
+  - Electron main-process packaged path resolution now uses ESM-safe `fileURLToPath(import.meta.url)` instead of raw `__dirname`
+  - packaged smoke now clears `release/` before running and stops immediately on the first build/package failure
+- Previous stable phases remain preserved in code, but the required packaging gates still cannot pass on this specific machine because Windows is returning `spawn EPERM` for Vite/esbuild and `app-builder.exe`.

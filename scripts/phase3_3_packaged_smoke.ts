@@ -8,7 +8,7 @@ import {
   getMySQLDataDir,
   getPhpRuntimeIniPath,
   resolveAppIconPath,
-} from '../electron/utils/runtime.paths';
+} from '../electron/utils/runtime.paths.ts';
 
 type StepResult = {
   name: string;
@@ -21,6 +21,11 @@ interface CommandResult {
   signal: NodeJS.Signals | null;
   stdout: string;
   stderr: string;
+}
+
+interface CommandSpec {
+  command: string;
+  args: string[];
 }
 
 const results: StepResult[] = [];
@@ -48,6 +53,21 @@ function summarizeOutput(output: string): string {
   return lines.slice(-8).join(' | ');
 }
 
+function getNpmCommand(args: string[]): CommandSpec {
+  const npmExecPath = process.env.npm_execpath;
+  if (npmExecPath) {
+    return {
+      command: process.execPath,
+      args: [npmExecPath, ...args],
+    };
+  }
+
+  return {
+    command: process.platform === 'win32' ? 'npm.cmd' : 'npm',
+    args,
+  };
+}
+
 async function runCommand(
   command: string,
   args: string[],
@@ -55,27 +75,13 @@ async function runCommand(
   env?: NodeJS.ProcessEnv
 ): Promise<CommandResult> {
   return new Promise<CommandResult>((resolve, reject) => {
-    const isWindows = process.platform === 'win32';
-    const escapedCmd = isWindows
-      ? [command, ...args]
-          .map((part) => {
-            if (!/[\s"]/g.test(part)) return part;
-            return `"${part.replace(/"/g, '\\"')}"`;
-          })
-          .join(' ')
-      : '';
-
-    const child = spawn(
-      isWindows ? 'cmd.exe' : command,
-      isWindows ? ['/d', '/s', '/c', escapedCmd] : args,
-      {
-        cwd,
-        env: env ?? process.env,
-        windowsHide: true,
-        shell: false,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      }
-    );
+    const child = spawn(command, args, {
+      cwd,
+      env: env ?? process.env,
+      windowsHide: true,
+      shell: false,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
 
     let stdout = '';
     let stderr = '';
@@ -107,13 +113,14 @@ async function runCommand(
   });
 }
 
-async function runStep(name: string, fn: () => Promise<string>): Promise<void> {
+async function runRequiredStep(name: string, fn: () => Promise<string>): Promise<void> {
   try {
     const details = await fn();
     pushResult(name, true, details);
   } catch (error) {
     const details = error instanceof Error ? error.message : String(error);
     pushResult(name, false, details);
+    throw error;
   }
 }
 
@@ -198,15 +205,23 @@ async function runPackagedAppSmoke(exePath: string, timeoutMs: number): Promise<
 async function main(): Promise<void> {
   const projectRoot = process.cwd();
   const outputPath = path.join(projectRoot, 'phase3_3_packaged_smoke_results.json');
-  const npmCmd = 'npm';
+  const releaseDir = path.join(projectRoot, 'release');
   const packagedRoot = path.join(projectRoot, 'release', 'win-unpacked');
   const resourcesDir = path.join(packagedRoot, 'resources');
   const binariesRoot = path.join(resourcesDir, 'binaries');
   const exePath = path.join(packagedRoot, 'DevStack Local.exe');
 
   try {
-    await runStep('Build web/electron bundles', async () => {
-      const result = await runCommand(npmCmd, ['run', 'build'], projectRoot);
+    await runRequiredStep('Clean packaged output', async () => {
+      const releaseDirExisted = fs.existsSync(releaseDir);
+      fs.rmSync(releaseDir, { recursive: true, force: true });
+      assert(!fs.existsSync(packagedRoot), `Failed to clean stale packaged output: ${packagedRoot}`);
+      return releaseDirExisted ? 'Removed stale release/ output before smoke run' : 'No stale release/ output found';
+    });
+
+    await runRequiredStep('Build web/electron bundles', async () => {
+      const npmCommand = getNpmCommand(['run', 'build']);
+      const result = await runCommand(npmCommand.command, npmCommand.args, projectRoot);
       if (result.code !== 0) {
         const details = summarizeOutput(result.stderr || result.stdout) || `exit code ${result.code}`;
         throw new Error(`npm run build failed (${details})`);
@@ -214,19 +229,20 @@ async function main(): Promise<void> {
       return 'npm run build completed';
     });
 
-    await runStep('Build unpacked Windows package', async () => {
+    await runRequiredStep('Build unpacked Windows package', async () => {
+      const npmCommand = getNpmCommand([
+        'exec',
+        'electron-builder',
+        '--',
+        '--win',
+        '--dir',
+        '--publish',
+        'never',
+        '--config.win.signAndEditExecutable=false',
+      ]);
       const result = await runCommand(
-        npmCmd,
-        [
-          'exec',
-          'electron-builder',
-          '--',
-          '--win',
-          '--dir',
-          '--publish',
-          'never',
-          '--config.win.signAndEditExecutable=false',
-        ],
+        npmCommand.command,
+        npmCommand.args,
         projectRoot
       );
       if (result.code !== 0) {
@@ -236,7 +252,7 @@ async function main(): Promise<void> {
       return 'release/win-unpacked generated';
     });
 
-    await runStep('Verify packaged resources and binaries', async () => {
+    await runRequiredStep('Verify packaged resources and binaries', async () => {
       const requiredPaths = [
         path.join(resourcesDir, 'app.asar'),
         path.join(resourcesDir, 'icon.ico'),
@@ -254,7 +270,7 @@ async function main(): Promise<void> {
       return `Validated app.asar, icon, Apache/MySQL binaries, and PHP CGI (${phpCgiPath})`;
     });
 
-    await runStep('Verify packaged path resolution contract', async () => {
+    await runRequiredStep('Verify packaged path resolution contract', async () => {
       const processWithResourcesPath = process as NodeJS.Process & { resourcesPath?: string };
       const originalResourcesPath = processWithResourcesPath.resourcesPath;
       processWithResourcesPath.resourcesPath = resourcesDir;
@@ -294,7 +310,7 @@ async function main(): Promise<void> {
       return 'Bundled resources resolve from resources/binaries and mutable paths stay outside packaged resources';
     });
 
-    await runStep('Packaged app startup smoke exits cleanly', async () => {
+    await runRequiredStep('Packaged app startup smoke exits cleanly', async () => {
       assert(fs.existsSync(exePath), `Packaged executable not found: ${exePath}`);
 
       const result = await runPackagedAppSmoke(exePath, 5000);

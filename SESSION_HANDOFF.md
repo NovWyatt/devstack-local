@@ -2,6 +2,40 @@
 
 Date: 2026-04-14
 
+## Session 2026-04-14 - Phase 5.1.2 Packaged Build + Runtime Unblock
+
+**Completed:**
+- Re-read `SESSION_HANDOFF.md` and `PHASE5_1_1_REPORT.md` before resuming work.
+- Confirmed `cpu-features@0.0.10` is pulled only by `ssh2-sftp-client -> ssh2`.
+- Verified that `cpu-features` is optional at runtime and only used by `ssh2` for crypto/cipher optimization.
+- Updated `electron-builder.json` to skip native dependency rebuilds with `npmRebuild=false`.
+- Replaced Electron main-process `__dirname` path assumptions with ESM-safe `fileURLToPath(import.meta.url)` resolution.
+- Hardened packaged smoke so it cleans `release/` before starting, fails immediately on build/package errors, and cannot report stale `win-unpacked` artifacts as PASS.
+- Switched the packaged smoke entrypoint to `node --experimental-strip-types` so the smoke script can run without `tsx`/esbuild intercepting it first.
+- Created `PHASE5_1_2_REPORT.md`.
+- Updated `README.md` and `PROJECT_CONTEXT.md` with packaging/toolchain constraints and current Phase 5.1.2 status.
+- Ran the required gates:
+  - `npm run verify`: FAIL
+  - `npm run smoke:packaged`: FAIL
+  - `npx electron-builder -- --win nsis --publish never --config.win.signAndEditExecutable=false`: FAIL
+
+**Decisions Made:**
+- Kept the Electron runtime output strategy as ESM and fixed path resolution at the source instead of switching main/preload back to CommonJS.
+- Treated `cpu-features` as an optional optimization, not a required runtime dependency, and disabled `electron-builder` native rebuilds accordingly.
+- Kept scope limited to packaging/runtime unblock only; no Phase 5.2 work and no new features.
+- Treated the remaining verification failures as environment-level Windows child-process spawn blockers after the repo-side packaging/runtime fixes.
+
+**Next Steps:**
+- Re-run `npm run verify` on a Windows environment where Node/Vite/esbuild child-process spawning is permitted.
+- Re-run `npm run smoke:packaged` on that environment to confirm the packaged app launches and exits cleanly after the ESM path fix.
+- Re-run the explicit NSIS builder command on that environment to confirm packaging completes after skipping the optional native rebuild path.
+- Keep Phase 5.2 blocked until those three gates pass.
+
+**Blockers:**
+- `npm run verify` still fails on this machine because Vite/esbuild child-process startup returns `spawn EPERM`.
+- `npm run smoke:packaged` now correctly cleans stale release output and then fails immediately on the same build-time `spawn EPERM`.
+- `electron-builder` now skips dependency rebuild, but this machine still blocks `app-builder.exe` during Electron unpack with `spawn EPERM`.
+
 ## Session 2026-04-14 - Phase 5.1.1 Stabilization
 
 **Completed:**
