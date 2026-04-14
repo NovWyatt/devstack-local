@@ -2,6 +2,142 @@
 
 Date: 2026-04-14
 
+## Session 2026-04-14 - Phase 5.1.9 Exact Gate Rerun 4
+
+**Completed:**
+- Re-read `SESSION_HANDOFF.md`, `PROJECT_CONTEXT.md`, and `PHASE5_1_8_REPORT.md`.
+- Re-ran the required commands exactly from the current repo root:
+  - `npm run build`: FAIL
+  - `npm run verify`: FAIL
+  - `npm run smoke:packaged`: FAIL
+  - `npx electron-builder -- --win nsis --publish never --config.win.signAndEditExecutable=false`: FAIL
+- Re-confirmed current artifact state in this shell:
+  - `dist-electron/main.js`: missing
+  - `dist-electron/preload.js`: missing
+  - `release/win-unpacked/DevStack Local.exe`: missing
+- Re-confirmed packaged smoke still fails at the build step before packaged launch can be exercised.
+
+**Decisions Made:**
+- Did not make another repo-side patch because the exact remaining blocker is still Windows child-process `spawn EPERM`, including `esbuild` and `electron-builder`'s required `app-builder.exe` launch path.
+- Left `PROJECT_CONTEXT.md` unchanged because the project state and blocker diagnosis did not change.
+- Kept Phase 5.2 blocked because the four required gates are still not green.
+
+**Next Steps:**
+- Re-run the same four commands on the clean Windows environment where Node child-process spawning is permitted.
+- Confirm there that:
+  - `dist-electron/main.js` exists
+  - `dist-electron/preload.js` exists
+  - `release/win-unpacked/DevStack Local.exe` exists
+  - the packaged app launches and exits cleanly
+- Only after those checks pass should `PHASE5_1_9_REPORT.md` be created and Phase 5.2 be marked safe to start.
+
+**Blockers:**
+- `npm run build` still fails during nested Electron `vite:esbuild` transform of `electron/main.ts` with `spawn EPERM`.
+- `npm run verify` still fails because it stops at that same build step.
+- `npm run smoke:packaged` still fails at its build step with `spawn EPERM`.
+- Direct `electron-builder` still fails because Node cannot spawn `node_modules\\app-builder-bin\\win\\x64\\app-builder.exe` (`spawn EPERM`).
+
+## Session 2026-04-14 - Phase 5.1.9 Exact Gate Rerun 3
+
+**Completed:**
+- Re-read `SESSION_HANDOFF.md`, `PROJECT_CONTEXT.md`, and `PHASE5_1_8_REPORT.md`.
+- Re-ran the required commands exactly from the current repo root:
+  - `npm run build`: FAIL
+  - `npm run verify`: FAIL
+  - `npm run smoke:packaged`: FAIL
+  - `npx electron-builder -- --win nsis --publish never --config.win.signAndEditExecutable=false`: FAIL
+- Re-confirmed current artifact state in this shell:
+  - `dist-electron/main.js`: missing
+  - `dist-electron/preload.js`: missing
+  - `release/win-unpacked/DevStack Local.exe`: missing
+- Re-confirmed packaged smoke still fails at the build step before packaged launch can be exercised.
+
+**Decisions Made:**
+- Did not make another repo-side patch because the exact remaining blocker is still Windows child-process `spawn EPERM`, which is outside repo config scope and also blocks `electron-builder`'s required `app-builder.exe` launch path.
+- Kept Phase 5.2 blocked because the four required gates are still not green.
+
+**Next Steps:**
+- Re-run the same four commands on the clean Windows environment where Node child-process spawning is permitted.
+- Confirm there that:
+  - `dist-electron/main.js` exists
+  - `dist-electron/preload.js` exists
+  - `release/win-unpacked/DevStack Local.exe` exists
+  - the packaged app launches and exits cleanly
+- Only after those checks pass should `PHASE5_1_9_REPORT.md` be created and Phase 5.2 be marked safe to start.
+
+**Blockers:**
+- `npm run build` still fails during nested Electron `vite:esbuild` transform of `electron/main.ts` with `spawn EPERM`.
+- `npm run verify` still fails because it stops at that same build step.
+- `npm run smoke:packaged` still fails at its build step with `spawn EPERM`.
+- Direct `electron-builder` still fails because Node cannot spawn `node_modules\\app-builder-bin\\win\\x64\\app-builder.exe` (`spawn EPERM`).
+
+## Session 2026-04-14 - Phase 5.1.9 Exact Gate Rerun 2
+
+**Completed:**
+- Re-read `SESSION_HANDOFF.md`, `PROJECT_CONTEXT.md`, and `PHASE5_1_8_REPORT.md`.
+- Re-ran the required commands exactly from the current repo root:
+  - `npm run build`: FAIL
+  - `npm run verify`: FAIL
+  - `npm run smoke:packaged`: FAIL
+  - `npx electron-builder -- --win nsis --publish never --config.win.signAndEditExecutable=false`: FAIL
+- Re-confirmed current artifact state in this shell:
+  - `dist-electron/main.js`: missing
+  - `dist-electron/preload.js`: missing
+  - `release/win-unpacked/DevStack Local.exe`: missing
+- Re-confirmed packaged smoke still fails at the build step before packaged launch can be exercised.
+
+**Decisions Made:**
+- Did not make another repo-side patch because the exact remaining blocker is still Windows child-process `spawn EPERM`, including `electron-builder`'s required `app-builder.exe` launch path.
+- Kept Phase 5.2 blocked because the four required gates are still not green.
+
+**Next Steps:**
+- Re-run the same four commands on the clean Windows environment where Node child-process spawning is permitted.
+- Confirm there that:
+  - `dist-electron/main.js` exists
+  - `dist-electron/preload.js` exists
+  - `release/win-unpacked/DevStack Local.exe` exists
+  - the packaged app launches and exits cleanly
+- Only after those checks pass should `PHASE5_1_9_REPORT.md` be created and Phase 5.2 be marked safe to start.
+
+**Blockers:**
+- `npm run build` still fails during nested Electron `vite:esbuild` transform of `electron/main.ts` with `spawn EPERM`.
+- `npm run verify` still fails because it stops at that same build step.
+- `npm run smoke:packaged` still fails at its build step with `spawn EPERM`.
+- Direct `electron-builder` still fails because Node cannot spawn `node_modules\\app-builder-bin\\win\\x64\\app-builder.exe` (`spawn EPERM`).
+
+## Session 2026-04-14 - Phase 5.1.9 Exact Gate Rerun
+
+**Completed:**
+- Re-read `SESSION_HANDOFF.md`, `PROJECT_CONTEXT.md`, and `PHASE5_1_8_REPORT.md`.
+- Re-ran the required commands exactly from the current repo root:
+  - `npm run build`: FAIL
+  - `npm run verify`: FAIL
+  - `npm run smoke:packaged`: FAIL
+  - `npx electron-builder -- --win nsis --publish never --config.win.signAndEditExecutable=false`: FAIL
+- Re-confirmed current artifact state in this shell:
+  - `dist-electron/main.js`: missing
+  - `dist-electron/preload.js`: missing
+  - `release/win-unpacked/DevStack Local.exe`: missing
+
+**Decisions Made:**
+- Did not make another repo-side patch because the exact remaining blocker is still environment-level Node child-process spawning, not unresolved Electron externalization or packaging config.
+- Kept Phase 5.2 blocked because all four required gates are still failing.
+
+**Next Steps:**
+- Re-run the same four commands on the clean Windows environment where Node child-process spawning is permitted.
+- Confirm there that:
+  - `dist-electron/main.js` exists
+  - `dist-electron/preload.js` exists
+  - `release/win-unpacked/DevStack Local.exe` exists
+  - the packaged app launches and exits cleanly
+- Only after those checks pass should `PHASE5_1_9_REPORT.md` be created and Phase 5.2 be marked safe to start.
+
+**Blockers:**
+- `npm run build` still fails during nested Electron `vite:esbuild` transform of `electron/main.ts` with `spawn EPERM`.
+- `npm run verify` still fails because it stops at that same build step.
+- `npm run smoke:packaged` still fails at its build step with `spawn EPERM`.
+- Direct `electron-builder` still fails because Node cannot spawn `node_modules\\app-builder-bin\\win\\x64\\app-builder.exe` (`spawn EPERM`).
+
 ## Session 2026-04-14 - Clean Windows Gate Closure Request Blocked By Session Environment
 
 **Completed:**
