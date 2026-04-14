@@ -1,6 +1,37 @@
 # SESSION HANDOFF
 
-Date: 2026-04-13
+Date: 2026-04-14
+
+## Session 2026-04-14 - Phase 5.1.1 Stabilization
+
+**Completed:**
+- Re-read `SESSION_HANDOFF.md` and `PHASE5_1_REPORT.md` before resuming work.
+- Checked `.git/index.lock`; it was already absent, so no lock removal was needed.
+- Ran `git status` and confirmed the worktree was clean before new edits.
+- Inspected current Phase 5.1.1 repo state and confirmed stale tracked temp/cache artifacts were present in `HEAD`.
+- Re-ran `npm run verify` and isolated the failure to Windows `spawn EPERM` during Vite/esbuild startup.
+- Re-ran `npm run smoke:packaged` and confirmed `tsx`/esbuild fails with the same Windows `spawn EPERM` before the smoke script can begin.
+- Re-ran the packaging path and confirmed `electron-builder` also fails with Windows `spawn EPERM` when it tries to launch `app-builder.exe`.
+- Probed Node/Electron child-process behavior directly and confirmed the current machine blocks child-process creation broadly, not just Vite or `tsx`.
+- Created `PHASE5_1_1_REPORT.md`.
+- Added ignore coverage for temp/cache artifacts.
+- Confirmed tracked temp/cache cleanup, staging, and commit are blocked in this session because `.git` cannot create `index.lock`.
+
+**Decisions Made:**
+- Kept scope to Phase 5.1.1 stabilization only; no Phase 5.2 work and no UI redesign.
+- Did not widen product scope or alter stable phase logic just to fake a green verification result under an OS-level blocker.
+- Treated the remaining issue as a Windows environment/policy problem affecting Node/Electron child-process creation.
+
+**Next Steps:**
+- Re-run `npm run verify` on a Windows environment where Node/Electron child-process spawning is permitted.
+- Re-run `npm run smoke:packaged` on that same environment after the child-process `EPERM` issue is resolved.
+- Keep Phase 5.2 blocked until both gates pass for Phase 5.1.1.
+
+**Blockers:**
+- `npm run verify` is blocked because Vite/esbuild cannot start its child process (`spawn EPERM`).
+- Real service-start verification is also blocked because Node/Electron cannot spawn Apache/MySQL/PHP-CGI child processes on this machine.
+- `npm run smoke:packaged` is blocked because `electron-builder` cannot spawn `app-builder.exe` (`spawn EPERM`).
+- `.git` is ACL-protected in this session, so `git rm`, staging, and commit all fail when git tries to create `index.lock`.
 
 ## Session 2026-04-13 - Phase 5.1
 

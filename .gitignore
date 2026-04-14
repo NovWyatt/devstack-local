@@ -6,8 +6,15 @@ release/
 .env
 .env.local
 *.log
+*.tsbuildinfo
 .DS_Store
 Thumbs.db
+.npm-cache/
+.npm-cache-local/
+.tmp-phase5-esm-run/
+.tmp-phase5-tests-run/
+.tmp-verify-probe/
+.tools/
 
 # Runtime-generated service artifacts (keep bundled binaries tracked)
 resources/binaries/apache/logs/
